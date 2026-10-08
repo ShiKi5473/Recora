@@ -1,0 +1,277 @@
+package tw.com.mufudashcam.data.net
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiNetworkSpecifier
+import android.os.PatternMatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import tw.com.mufudashcam.data.DiagLog
+import tw.com.mufudashcam.data.SettingsStore
+import tw.com.mufudashcam.data.api.DashcamApi
+
+sealed interface ConnState {
+    data object Idle : ConnState
+    /** 等待系統的 Wi-Fi 連線對話框。 */
+    data object Requesting : ConnState
+    data class Connected(val viaOverride: Boolean) : ConnState
+    data class Failed(val message: String) : ConnState
+}
+
+/**
+ * 連上記錄器的 Wi-Fi 並把整個 App 綁到該網路（API 文件 §1：此 AP 沒有網際網路，
+ * 不綁定的話系統會把請求送到行動網路）。
+ *
+ * - [connect]：用 WifiNetworkSpecifier 請求 SSID 前綴相符的網路，系統會跳出選擇對話框。
+ * - [start]：監聽所有 Wi-Fi 網路；使用者若已在系統設定手動連上，探測到記錄器就直接綁定。
+ *
+ * 放在 Application 層級，前景服務下載時網路請求不會因為 Activity 關閉而被釋放。
+ * 連線過程記在 [log]，裝置頁會顯示，方便在沒有接電腦時查原因。
+ */
+class DashcamConnection(
+    context: Context,
+    private val api: DashcamApi,
+    private val settings: SettingsStore,
+    private val scope: CoroutineScope,
+) {
+    private val cm = context.getSystemService(ConnectivityManager::class.java)
+    private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
+    val state: StateFlow<ConnState> = _state.asStateFlow()
+    val isConnected: Boolean get() = _state.value is ConnState.Connected
+
+    /** 診斷紀錄（與 API 請求共用）。 */
+    val log: StateFlow<List<String>> = DiagLog.lines
+
+    /** 每次連上後呼叫（用來補送 recordon）。 */
+    var onConnected: (suspend () -> Unit)? = null
+
+    private val lock = Mutex()
+
+    @Volatile
+    private var boundNetwork: Network? = null
+
+    /** 最近一次綁定失敗是因為 VPN 不允許繞過。 */
+    @Volatile
+    private var blockedByVpn = false
+
+    @Volatile
+    private var requestCallback: ConnectivityManager.NetworkCallback? = null
+    private var monitorCallback: ConnectivityManager.NetworkCallback? = null
+
+    fun start() {
+        if (monitorCallback != null) return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                // 正在等系統對話框時由 connect() 的 callback 處理，避免同一個網路探測兩次
+                if (requestCallback != null) return
+                scope.launch { tryBind(network, userSelected = false) }
+            }
+
+            override fun onLost(network: Network) = handleLost(network)
+        }
+        cm.registerNetworkCallback(wifiRequest(null), cb)
+        monitorCallback = cb
+        scope.launch { if (settings.current().overrideActive) connectOverride() }
+    }
+
+    fun connect() {
+        scope.launch {
+            disconnectJob?.join()
+            val s = settings.current()
+            if (s.overrideActive) {
+                connectOverride()
+                return@launch
+            }
+            if (isConnected) return@launch
+            releaseRequest()
+            val spec = WifiNetworkSpecifier.Builder()
+                .setSsidPattern(PatternMatcher(s.ssidPrefix, PatternMatcher.PATTERN_PREFIX))
+                .setWpa2Passphrase(s.wifiPassword)
+                .build()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    log("已連上 Wi-Fi（$network）")
+                    scope.launch {
+                        if (!tryBind(network, userSelected = true)) {
+                            _state.value = ConnState.Failed(
+                                if (blockedByVpn) {
+                                    VPN_BLOCKED_MESSAGE
+                                } else {
+                                    "已連上 Wi-Fi，但無法使用此網路（詳見「裝置」頁的診斷紀錄）"
+                                },
+                            )
+                        }
+                    }
+                }
+
+                override fun onUnavailable() {
+                    log("系統回報：找不到或使用者取消")
+                    requestCallback = null
+                    if (_state.value == ConnState.Requesting) {
+                        _state.value = ConnState.Failed("未連線：找不到 ${s.ssidPrefix}… 的 Wi-Fi，或已取消")
+                    }
+                }
+
+                override fun onLost(network: Network) = handleLost(network)
+            }
+            log("要求連線到 ${s.ssidPrefix}… 的 Wi-Fi")
+            _state.value = ConnState.Requesting
+            requestCallback = cb
+            // 使用者在系統對話框按取消時，Android 16 不一定會回呼 onUnavailable，所以加上逾時
+            cm.requestNetwork(wifiRequest(spec), cb, REQUEST_TIMEOUT_MS)
+        }
+    }
+
+    /** 放棄等待系統連線對話框。 */
+    fun cancelRequest() {
+        if (_state.value != ConnState.Requesting) return
+        log("取消等待連線")
+        releaseRequest()
+        _state.value = ConnState.Idle
+    }
+
+    @Volatile
+    private var disconnectJob: kotlinx.coroutines.Job? = null
+
+    /** 中斷連線；同官方 App，先通知記錄器 UserDisconnect=ON（記錄器才會恢復一般狀態）。 */
+    fun disconnect() {
+        val wasConnected = isConnected
+        if (boundNetwork != null || requestCallback != null) log("中斷連線")
+        _state.value = ConnState.Idle
+        disconnectJob = scope.launch {
+            if (wasConnected) {
+                try {
+                    kotlinx.coroutines.withTimeout(3000) { api.set("UserDisconnect", "ON") }
+                } catch (e: Exception) {
+                    // 記錄器已經離線也沒關係
+                }
+            }
+            releaseRequest()
+            unbind()
+        }
+    }
+
+    /** debug：直接用預設網路連 host 覆寫位址（假記錄器）。 */
+    private suspend fun connectOverride() {
+        unbind()
+        releaseRequest()
+        val result = api.probe(null)
+        log("測試模式探測 ${api.host}：${result.detail}")
+        _state.value = if (result.ok) {
+            ConnState.Connected(viaOverride = true).also { scope.launch { onConnected?.invoke() } }
+        } else {
+            ConnState.Failed("連不到 ${api.host}：${result.detail}")
+        }
+    }
+
+    /**
+     * 探測記錄器並把 App 綁到 [network]。
+     * [userSelected] = 使用者在系統對話框選了記錄器的 Wi-Fi：探測失敗仍然綁定，
+     * 讓後續的請求顯示實際錯誤，而不是停在「沒有回應」。
+     */
+    private suspend fun tryBind(network: Network, userSelected: Boolean): Boolean {
+        if (boundNetwork == network) return true
+        if (boundNetwork != null || settings.current().overrideActive) return false
+        blockedByVpn = false
+        if (userSelected) describe(network)
+
+        val attempts = if (userSelected) PROBE_ATTEMPTS else 1
+        var ok = false
+        for (attempt in 1..attempts) {
+            val result = api.probe(network)
+            if (result.ok) {
+                log("記錄器 ${api.host} 有回應（${result.detail}）")
+                ok = true
+                break
+            }
+            if (userSelected) log("探測 ${api.host} 失敗（第 $attempt/$attempts 次）：${result.detail}")
+            // VPN 不允許 App 繞過它時，綁定網路會回 EPERM，重試也沒用
+            if ("EPERM" in result.detail && isVpnActive()) {
+                blockedByVpn = true
+                if (userSelected) log("被 VPN 擋住：請在 VPN App 把本 App 排除，或暫停 VPN")
+                return false
+            }
+            if (attempt < attempts) delay(PROBE_RETRY_DELAY_MS)
+        }
+        if (!ok && !userSelected) return false
+        if (!ok) log("仍然綁定此網路，之後的請求會顯示錯誤原因")
+
+        val bound = lock.withLock {
+            if (boundNetwork == network) return true
+            if (boundNetwork != null) return false
+            if (!cm.bindProcessToNetwork(network)) {
+                blockedByVpn = isVpnActive()
+                log("bindProcessToNetwork 失敗")
+                return false
+            }
+            boundNetwork = network
+            _state.value = ConnState.Connected(viaOverride = false)
+            true
+        }
+        if (bound) {
+            log("已綁定到記錄器網路")
+            onConnected?.invoke()
+        }
+        return bound
+    }
+
+    /** 把網路細節記進連線紀錄（手機拿到的位址、閘道，以及是否有 VPN）。 */
+    private fun describe(network: Network) {
+        val lp = cm.getLinkProperties(network)
+        val addresses = lp?.linkAddresses?.joinToString { it.toString() } ?: "?"
+        val gateways = lp?.routes?.mapNotNull { it.gateway?.hostAddress }?.filter { it != "0.0.0.0" && it != "::" }?.distinct()
+        log("介面 ${lp?.interfaceName ?: "?"}，手機位址 $addresses，閘道 ${gateways?.joinToString().orEmpty().ifEmpty { "無" }}")
+        if (isVpnActive()) log("注意：手機正在使用 VPN，可能擋住連到記錄器的連線")
+    }
+
+    /** 本 App 目前是否在 VPN 底下（被 VPN App 排除的話這裡會是 false）。 */
+    private fun isVpnActive(): Boolean =
+        cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+
+    private fun handleLost(network: Network) {
+        if (network != boundNetwork) return
+        log("記錄器網路中斷")
+        unbind()
+        _state.value = ConnState.Failed("與記錄器的連線中斷")
+    }
+
+    private fun unbind() {
+        if (boundNetwork != null) {
+            cm.bindProcessToNetwork(null)
+            boundNetwork = null
+        }
+    }
+
+    private fun releaseRequest() {
+        requestCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+        requestCallback = null
+    }
+
+    private fun wifiRequest(spec: WifiNetworkSpecifier?): NetworkRequest =
+        NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .apply { if (spec != null) setNetworkSpecifier(spec) }
+            .build()
+
+    private fun log(message: String) = DiagLog.log(message)
+
+    private companion object {
+        const val REQUEST_TIMEOUT_MS = 60_000
+        const val PROBE_ATTEMPTS = 3
+        const val PROBE_RETRY_DELAY_MS = 1500L
+        const val VPN_BLOCKED_MESSAGE =
+            "手機的 VPN（例如 AdGuard）擋住了記錄器連線。\n" +
+                "請在 VPN App 中把「MUFU 記錄器」設為不經過 VPN，或暫停 VPN 後再連線。"
+    }
+}
