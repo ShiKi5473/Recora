@@ -18,7 +18,11 @@ import java.io.OutputStream
  * 串流下載 + 從目前位移續傳（GoAhead 支援 HTTP Range，API 文件 §3.3）。
  * 連線中斷時用 `Range: bytes=<已下載>-` 接續，不必整檔重來。
  */
-class RangeDownloader(private val client: OkHttpClient) {
+class RangeDownloader(
+    private val client: OkHttpClient,
+    /** 重試間隔的基數（指數退避：1、2、4…倍）；單元測試用較短的值。 */
+    private val retryBaseMs: Long = RETRY_BASE_MS,
+) {
 
     class NotFoundException : IOException("記錄器上找不到此檔案 (404)")
 
@@ -110,7 +114,7 @@ class RangeDownloader(private val client: OkHttpClient) {
                 ensureActive()
                 Log.w(TAG, "interrupted at $offset / $total (attempt $failures): $url", e)
                 if (++failures > MAX_RETRIES) throw e
-                delay(RETRY_BASE_MS shl (failures - 1))
+                delay(retryBaseMs shl (failures - 1))
             }
         }
         @Suppress("UNREACHABLE_CODE")

@@ -34,6 +34,10 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        // RangeDownloader 等用到 android.util.Log：JVM 單元測試讓它直接回預設值
+        unitTests.isReturnDefaultValues = true
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -72,4 +76,5 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
 }
