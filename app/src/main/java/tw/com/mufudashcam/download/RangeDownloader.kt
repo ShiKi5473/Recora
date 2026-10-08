@@ -1,10 +1,12 @@
 package tw.com.mufudashcam.download
 
 import android.util.Log
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -45,7 +47,15 @@ class RangeDownloader(private val client: OkHttpClient) {
                     .apply { if (offset > 0) header("Range", "bytes=$offset-") }
                     .build()
                 val call = client.newCall(request)
-                val cancelHook = coroutineContext.job.invokeOnCompletion { call.cancel() }
+                // execute() 與 read() 是阻塞呼叫，協程被取消時不會自己停：另開一個監看的子協程，
+                // 一取消就 call.cancel() 把連線切掉（invokeOnCompletion 要等協程結束才觸發，來不及）
+                val canceller = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        call.cancel()
+                    }
+                }
                 try {
                     call.execute().use { resp ->
                         when (resp.code) {
@@ -84,7 +94,7 @@ class RangeDownloader(private val client: OkHttpClient) {
                         }
                     }
                 } finally {
-                    cancelHook.dispose()
+                    canceller.cancel()
                 }
                 if (total < 0 || offset >= total) return@withContext offset to total
                 // 串流提早結束：從目前位移接續
