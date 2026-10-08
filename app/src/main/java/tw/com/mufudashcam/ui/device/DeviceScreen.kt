@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.BuildConfig
+import tw.com.mufudashcam.data.DashcamConfig
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.SettingDef
 import tw.com.mufudashcam.ui.Formats
@@ -348,6 +349,20 @@ private fun WifiFields(ssidPrefix: String, password: String, onSave: (String, St
     var prefix by rememberSaveable(ssidPrefix) { mutableStateOf(ssidPrefix) }
     var pwd by rememberSaveable(password) { mutableStateOf(password) }
     Text("記錄器 Wi-Fi", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+    Text(
+        "這裡只是 App 按「連線」時用的 SSID 開頭與密碼，不會改到記錄器本身。" +
+            "記錄器的密碼請用官方 App 修改，改完再回來這裡更新。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (password == DashcamConfig.DEFAULT_PASSWORD) {
+        Text(
+            "記錄器若還在用出廠密碼 ${DashcamConfig.DEFAULT_PASSWORD}，附近任何人都能連上，" +
+                "不需驗證就能刪除影片或格式化記憶卡。建議盡快改掉。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
     OutlinedTextField(
         value = prefix,
         onValueChange = { prefix = it },
