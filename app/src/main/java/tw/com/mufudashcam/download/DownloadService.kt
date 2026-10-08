@@ -108,6 +108,8 @@ class DownloadService : Service() {
     }
 
     private fun postSummary() {
+        // 佇列只是暫停（串流播放中），之後會接著下載
+        if (repo.tasks.value.any { it.isActive }) return
         val batch = repo.tasks.value.filter { it.id !in finishedAtStart && !it.isActive }
         if (batch.isEmpty()) return
         val ok = batch.count { it.status == TaskStatus.Done }

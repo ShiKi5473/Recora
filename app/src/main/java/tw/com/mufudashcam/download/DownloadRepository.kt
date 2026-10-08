@@ -66,6 +66,13 @@ class DownloadRepository(
     @Volatile
     private var current: Pair<String, Job>? = null
 
+    /** [hold] 的次數；大於 0 時佇列暫停（例如正在從記錄器串流播放）。 */
+    private val holds = MutableStateFlow(0)
+
+    /** 因 [hold] 而中斷的那個檔案：回到等待中，而不是變成「已取消」。 */
+    @Volatile
+    private var pausingId: String? = null
+
     /** @return 實際加入佇列的檔案數 */
     fun enqueue(files: List<DashcamFile>): Int {
         var added = 0
@@ -110,9 +117,30 @@ class DownloadRepository(
         _tasks.update { list -> list.filter { it.isActive } }
     }
 
+    /**
+     * 暫停佇列直到 [release]。記錄器一次只服務一個連線，串流播放時下載會跟播放器互搶而一起斷線；
+     * 正在下載的檔案停在目前位置，之後從中斷處續傳。
+     * @return 是否真的有下載被暫停（呼叫端用來提示使用者）
+     */
+    @Synchronized
+    fun hold(): Boolean {
+        holds.update { it + 1 }
+        current?.let { (id, job) ->
+            pausingId = id
+            job.cancel()
+        }
+        return _tasks.value.any { it.isActive }
+    }
+
+    fun release() {
+        holds.update { (it - 1).coerceAtLeast(0) }
+        startWorker()
+    }
+
     @Synchronized
     private fun startWorker() {
         if (worker != null) return
+        if (holds.value > 0) return
         if (_tasks.value.none { it.status == TaskStatus.Queued }) return
         _active.value = true
         try {
@@ -126,7 +154,7 @@ class DownloadRepository(
                     runQueue()
                     // 與 startWorker 同步檢查：收尾期間新加入的檔案由同一個 worker 接著處理
                     val more = synchronized(this@DownloadRepository) {
-                        val queued = _tasks.value.any { it.status == TaskStatus.Queued }
+                        val queued = holds.value == 0 && _tasks.value.any { it.status == TaskStatus.Queued }
                         if (!queued) {
                             worker = null
                             _active.value = false
@@ -164,10 +192,13 @@ class DownloadRepository(
                 }
                 break
             }
-            val job = launch { runTask(next) }
-            current = next.id to job
+            // 與 hold() 同步：暫停之後不再開始下一個檔案
+            val job = synchronized(this@DownloadRepository) {
+                if (holds.value > 0) null else launch { runTask(next) }.also { current = next.id to it }
+            } ?: break
             job.join()
             current = null
+            pausingId = null
         }
     }
 
@@ -226,7 +257,12 @@ class DownloadRepository(
                 )
             }
         } catch (e: CancellationException) {
-            updateTask(task.id) { it.copy(status = TaskStatus.Cancelled, message = "已取消（再次下載會從中斷處續傳）") }
+            if (pausingId == task.id) {
+                pausingId = null
+                updateTask(task.id) { it.copy(status = TaskStatus.Queued, speedBps = 0, message = "暫停中：正在播放記錄器上的影片") }
+            } else {
+                updateTask(task.id) { it.copy(status = TaskStatus.Cancelled, message = "已取消（再次下載會從中斷處續傳）") }
+            }
             throw e
         } catch (e: Exception) {
             updateTask(task.id) { it.copy(status = TaskStatus.Failed, message = e.message ?: e.javaClass.simpleName) }

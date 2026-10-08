@@ -112,6 +112,16 @@ fun PlayerScreen(
         }
         player.play()
     }
+    // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續
+    val streamingNow = current.url.startsWith("http")
+    DisposableEffect(streamingNow) {
+        if (!streamingNow) return@DisposableEffect onDispose { }
+        if (container.downloads.hold()) {
+            Toast.makeText(context, "已暫停下載，離開播放畫面後會從中斷處繼續", Toast.LENGTH_SHORT).show()
+        }
+        onDispose { container.downloads.release() }
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(player, lifecycleOwner) {
         val listener = object : Player.Listener {
