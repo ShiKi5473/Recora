@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -15,6 +15,8 @@ import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.exoplayer.util.EventLogger
 import tw.com.mufudashcam.BuildConfig
 import tw.com.mufudashcam.data.DiagLog
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 /**
  * 播放記錄器錄下的 TS 檔用的播放器設定（手機上的檔案與直接串流都用這個）。
@@ -34,12 +36,17 @@ import tw.com.mufudashcam.data.DiagLog
  *
  * 另外記錄器的 GoAhead 伺服器很弱（單核心、一次只服務一個連線），所以串流時逾時放寬、
  * 載入失敗多重試幾次（指數退避），並把預讀量壓小。
+ *
+ * HTTP 走 App 共用的 [client]（含 RouteGuard），斷線後不會把請求送到行動網路上。
  */
 @UnstableApi
-fun dashcamPlayer(context: Context, streaming: Boolean): ExoPlayer {
-    val http = DefaultHttpDataSource.Factory()
-        .setConnectTimeoutMs(CONNECT_TIMEOUT_MS)
-        .setReadTimeoutMs(READ_TIMEOUT_MS)
+fun dashcamPlayer(context: Context, client: OkHttpClient, streaming: Boolean): ExoPlayer {
+    val http = OkHttpDataSource.Factory(
+        client.newBuilder()
+            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .build(),
+    )
     val extractors = DefaultExtractorsFactory()
         .setTsExtractorTimestampSearchBytes(if (streaming) TS_SEARCH_BYTES_STREAM else TS_SEARCH_BYTES_LOCAL)
     val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http), extractors)
@@ -97,8 +104,8 @@ fun playbackErrorMessage(e: PlaybackException, streaming: Boolean): String {
     return "無法播放：$reason"
 }
 
-private const val CONNECT_TIMEOUT_MS = 8_000
-private const val READ_TIMEOUT_MS = 20_000
+private const val CONNECT_TIMEOUT_MS = 8_000L
+private const val READ_TIMEOUT_MS = 20_000L
 private const val MAX_LOAD_RETRIES = 6
 private const val MIN_BUFFER_MS = 15_000
 private const val MAX_BUFFER_MS = 30_000

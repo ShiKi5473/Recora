@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.withLock
 import tw.com.mufudashcam.data.DiagLog
 import tw.com.mufudashcam.data.SettingsStore
 import tw.com.mufudashcam.data.api.DashcamApi
+import java.net.InetAddress
 
 sealed interface ConnState {
     data object Idle : ConnState
@@ -47,6 +48,12 @@ class DashcamConnection(
     private val _state = MutableStateFlow<ConnState>(ConnState.Idle)
     val state: StateFlow<ConnState> = _state.asStateFlow()
     val isConnected: Boolean get() = _state.value is ConnState.Connected
+
+    /**
+     * 現在送出的請求會不會真的到記錄器：已綁定記錄器網路，或 debug 測試模式。
+     * 給 [RouteGuard] 用；比 [isConnected] 寬一點，中斷連線時送 UserDisconnect 還來得及。
+     */
+    val canReachDashcam: Boolean get() = boundNetwork != null || settings.state.value.overrideActive
 
     /** 診斷紀錄（與 API 請求共用）。 */
     val log: StateFlow<List<String>> = DiagLog.lines
@@ -181,6 +188,9 @@ class DashcamConnection(
     private suspend fun tryBind(network: Network, userSelected: Boolean): Boolean {
         if (boundNetwork == network) return true
         if (boundNetwork != null || settings.current().overrideActive) return false
+        // 自動偵測時，這個網路可能是家裡的 Wi-Fi：記錄器位址不在同一網段就不探測，
+        // 否則探測會經由路由器送到網際網路上的 192.72.1.1
+        if (!userSelected && !hostOnLink(network)) return false
         blockedByVpn = false
         if (userSelected) describe(network)
 
@@ -231,6 +241,13 @@ class DashcamConnection(
         val gateways = lp?.routes?.mapNotNull { it.gateway?.hostAddress }?.filter { it != "0.0.0.0" && it != "::" }?.distinct()
         log("介面 ${lp?.interfaceName ?: "?"}，手機位址 $addresses，閘道 ${gateways?.joinToString().orEmpty().ifEmpty { "無" }}")
         if (isVpnActive()) log("注意：手機正在使用 VPN，可能擋住連到記錄器的連線")
+    }
+
+    /** 記錄器位址在 [network] 的直連網段內（不經閘道），也就是手機拿到的是記錄器發的位址。 */
+    private fun hostOnLink(network: Network): Boolean {
+        val target = runCatching { InetAddress.getByName(api.host.substringBefore(':')) }.getOrNull() ?: return false
+        val routes = cm.getLinkProperties(network)?.routes ?: return false
+        return routes.any { !it.hasGateway() && it.destination.prefixLength > 0 && it.matches(target) }
     }
 
     /** 本 App 目前是否在 VPN 底下（被 VPN App 排除的話這裡會是 false）。 */

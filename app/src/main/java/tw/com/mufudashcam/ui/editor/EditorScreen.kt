@@ -90,7 +90,7 @@ fun EditorScreen(
     val baseName = remember(title) { title.substringBeforeLast('.').ifBlank { "clip" } }
 
     val player = remember {
-        dashcamPlayer(context, streaming = false).apply {
+        dashcamPlayer(context, container.http, streaming = false).apply {
             setMediaItem(MediaItem.fromUri(uri))
             prepare()
         }

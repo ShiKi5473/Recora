@@ -84,7 +84,7 @@ fun PlayerScreen(
     // 不讓 ExoPlayer 在這段還沒播完就同時去預抓下一段（兩條連線＝被記錄器踢掉）
     val streaming = remember { queue.any { it.url.startsWith("http") } }
     val player = remember {
-        dashcamPlayer(context, streaming).apply {
+        dashcamPlayer(context, container.http, streaming).apply {
             val items = queue.map { MediaItem.Builder().setUri(it.url).setMediaId(it.url).build() }
             if (streaming) setMediaItem(items[index]) else setMediaItems(items, index, 0)
             // 每段播完停下，不自動跳到下一段

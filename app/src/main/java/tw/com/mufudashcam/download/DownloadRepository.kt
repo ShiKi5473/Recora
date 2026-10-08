@@ -239,6 +239,7 @@ class DownloadRepository(
             val (bytes, total) = downloader.download(
                 url = url,
                 startOffset = start,
+                expectedSize = f.size,
                 openOutput = { offset -> sink.openOutput(uri, offset) },
             ) { b, t ->
                 val speed = meter.sample(b) ?: return@download

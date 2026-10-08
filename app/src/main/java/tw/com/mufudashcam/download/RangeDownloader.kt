@@ -8,6 +8,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import tw.com.mufudashcam.data.net.DashcamOfflineException
 import java.io.IOException
 import java.io.OutputStream
 
@@ -19,13 +20,18 @@ class RangeDownloader(private val client: OkHttpClient) {
 
     class NotFoundException : IOException("記錄器上找不到此檔案 (404)")
 
+    class RangeIgnoredException(total: Long, expected: Long) :
+        IOException("續傳時伺服器回 HTTP 200（大小 $total，預期 $expected），不覆寫已下載的部分")
+
     /**
+     * @param expectedSize 記錄器列表上的檔案大小（未知為 -1）；續傳時伺服器忽略 Range 才用得到
      * @param openOutput 開啟定位在指定位移的輸出串流（位移 0 = 從頭覆寫）
      * @return 最終檔案長度與伺服器回報的總長度（未知為 -1）
      */
     suspend fun download(
         url: String,
         startOffset: Long,
+        expectedSize: Long,
         openOutput: (offset: Long) -> OutputStream,
         onProgress: (bytes: Long, total: Long) -> Unit,
     ): Pair<Long, Long> = withContext(Dispatchers.IO) {
@@ -45,9 +51,13 @@ class RangeDownloader(private val client: OkHttpClient) {
                         when (resp.code) {
                             206 -> total = parseTotal(resp.header("Content-Range")) ?: -1L
                             200 -> {
-                                // 伺服器忽略 Range：只能從頭來
-                                offset = 0
                                 total = resp.body?.contentLength() ?: -1L
+                                // 伺服器忽略 Range：只能從頭來。但記錄器實測支援 Range，續傳時收到 200
+                                // 很可能根本不是記錄器回的，大小也對得上才覆寫已下載的部分
+                                if (offset > 0 && (expectedSize <= 0 || total != expectedSize)) {
+                                    throw RangeIgnoredException(total, expectedSize)
+                                }
+                                offset = 0
                             }
                             416 -> {
                                 val t = parseTotal(resp.header("Content-Range"))
@@ -82,6 +92,10 @@ class RangeDownloader(private val client: OkHttpClient) {
                 if (++failures > MAX_RETRIES) throw IOException("下載一再中斷（$offset / $total）")
             } catch (e: NotFoundException) {
                 throw e
+            } catch (e: RangeIgnoredException) {
+                throw e
+            } catch (e: DashcamOfflineException) {
+                throw e // 已經斷線，重試只會一直被 RouteGuard 擋下
             } catch (e: IOException) {
                 ensureActive()
                 Log.w(TAG, "interrupted at $offset / $total (attempt $failures): $url", e)

@@ -18,6 +18,7 @@ import tw.com.mufudashcam.data.FileNames
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.PathStyle
 import tw.com.mufudashcam.data.SettingsStore
+import tw.com.mufudashcam.data.net.RouteGuard
 import java.io.IOException
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
@@ -72,6 +73,8 @@ class DashcamApi(
      */
     suspend fun probe(network: Network?): ProbeResult = withContext(Dispatchers.IO) {
         val probeClient = client.newBuilder()
+            // 探測本來就發生在綁定之前：走的是指定網路（或測試模式的預設網路），不需要 RouteGuard
+            .apply { interceptors().removeAll { it is RouteGuard } }
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .callTimeout(15, TimeUnit.SECONDS)

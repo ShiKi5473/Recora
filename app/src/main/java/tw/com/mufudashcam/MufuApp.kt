@@ -15,6 +15,7 @@ import okhttp3.OkHttpClient
 import tw.com.mufudashcam.data.SettingsStore
 import tw.com.mufudashcam.data.api.DashcamApi
 import tw.com.mufudashcam.data.net.DashcamConnection
+import tw.com.mufudashcam.data.net.RouteGuard
 import tw.com.mufudashcam.download.DownloadRepository
 import tw.com.mufudashcam.download.MediaStoreSink
 import java.io.IOException
@@ -30,9 +31,10 @@ class MufuApp : Application(), ImageLoaderFactory {
         container.connection.start()
     }
 
-    /** 相簿縮圖要能解影片的某一格（coil-video）。 */
+    /** 相簿縮圖要能解影片的某一格（coil-video）；記錄器上的照片走共用的 client（受 RouteGuard 保護）。 */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
+            .okHttpClient { container.http }
             .components { add(VideoFrameDecoder.Factory()) }
             .crossfade(true)
             .build()
@@ -43,9 +45,11 @@ class AppContainer(val app: Application) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val settings = SettingsStore(app, appScope)
 
+    /** 所有連記錄器的 HTTP 請求（CGI、下載、串流播放、照片）共用；沒綁定記錄器網路時一律擋下。 */
     val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
+        .addInterceptor(RouteGuard { connection.canReachDashcam })
         .build()
 
     val api = DashcamApi(http, settings)
