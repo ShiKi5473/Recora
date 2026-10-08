@@ -8,9 +8,8 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
- * 用 RTSP DESCRIBE 確認某條即時串流路徑是否存在、包含哪些軌。
- * 官方 App 對此系列記錄器是用不同的串流路徑切換前後鏡頭（liveRTSP/av1、av2、v1、v2…），
- * 不是用設定指令，所以先探測再決定要播哪一條。
+ * debug 用：以 RTSP DESCRIBE 確認某條即時串流路徑是否存在、包含哪些軌，結果寫進診斷紀錄。
+ * 實測 V60P 只有 av4（前鏡頭 + 聲音）與 av5（後鏡頭），其他路徑都回 404。
  * 走 App 行程已綁定的記錄器網路。
  */
 object RtspProbe {

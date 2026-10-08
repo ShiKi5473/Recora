@@ -223,7 +223,7 @@ fun DeviceScreen(container: AppContainer) {
             if (BuildConfig.DEBUG) {
                 Section("開發者（debug build）") {
                     var host by rememberSaveable(settings.hostOverride) { mutableStateOf(settings.hostOverride) }
-                    Text("記錄器位址覆寫：填入假記錄器位址（模擬器用 10.0.2.2:8080），留空 = 使用真實記錄器。")
+                    Text("記錄器位址覆寫：填入假記錄器位址（模擬器用 adb reverse 加 127.0.0.1:8080），留空 = 使用真實記錄器。")
                     OutlinedTextField(
                         value = host,
                         onValueChange = { host = it },

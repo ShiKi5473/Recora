@@ -28,7 +28,7 @@ class DashcamApi(
     private val client: OkHttpClient,
     private val settings: SettingsStore,
 ) {
-    /** 可能含埠號（debug 覆寫時，例如 10.0.2.2:8080）。 */
+    /** 可能含埠號（debug 覆寫時，例如 127.0.0.1:8080）。 */
     val host: String get() = settings.state.value.host
     private val hostName: String get() = host.substringBefore(':')
     private val port: Int get() = host.substringAfter(':', "80").toIntOrNull() ?: 80

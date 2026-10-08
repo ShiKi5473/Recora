@@ -118,6 +118,15 @@ object LocalLibrary {
         }
     }
 
+    /**
+     * 剪輯輸出的檔名 `<原檔名>_0m10s0-0m15s0[_靜音].mp4`。格式要符合 [EDITED_RE]，
+     * 相簿才分辨得出「已剪輯」並顯示來源與片段，所以檔名只在這裡組。
+     */
+    fun editedName(videoName: String, startMs: Long, endMs: Long, muted: Boolean): String {
+        val base = videoName.substringBeforeLast('.').ifBlank { "clip" }
+        return "${base}_${nameTime(startMs)}-${nameTime(endMs)}${if (muted) "_靜音" else ""}.mp4"
+    }
+
     /** 檔名用的時間：0m12s3 */
     fun nameTime(ms: Long): String {
         val t = ms.coerceAtLeast(0)

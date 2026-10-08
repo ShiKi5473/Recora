@@ -1,13 +1,12 @@
 """開發用的假 MUFU V60P 記錄器（只用標準函式庫）。
 
 模擬 Config.cgi 的 get / set / dir / del，以及支援 HTTP Range 的靜態檔案下載，
-讓 App 在沒有實機時也能在模擬器上測試（App 的 debug host 覆寫設成 10.0.2.2:8080）。
+讓 App 在沒有實機時也能在模擬器上測試（先 adb reverse tcp:8080 tcp:8080，App 的 debug host 覆寫設成 127.0.0.1:8080）。
 
   python tools/mock_dashcam.py                       # 預設 127.0.0.1:8080
   python tools/mock_dashcam.py --throttle 400        # 限速 400 KB/s，方便觀察進度 / 取消
   python tools/mock_dashcam.py --drop-every 700      # 每個回應送 700 KB 就斷線，測續傳
   python tools/mock_dashcam.py --path-style root     # 只接受 /Video/F/... 路徑，測備用路徑
-  python tools/mock_dashcam.py --list-rear           # dir 也列出後鏡頭檔
 
 檔案內容是依位移產生的固定位元組（不是真的影片），大小與實機同級可調。
 """
@@ -272,7 +271,6 @@ def main():
     ap.add_argument("--throttle", type=int, default=0, help="限速 KB/s（0 = 不限）")
     ap.add_argument("--drop-every", type=int, default=0, help="每個回應送這麼多 KB 就斷線（0 = 不斷）")
     ap.add_argument("--path-style", choices=("both", "mnt", "root"), default="both")
-    ap.add_argument("--list-rear", action="store_true", help="dir 也列出後鏡頭檔")
     opts = ap.parse_args()
 
     Handler.store = Store(opts.clips, opts.size_kb, opts.events, opts.photos)

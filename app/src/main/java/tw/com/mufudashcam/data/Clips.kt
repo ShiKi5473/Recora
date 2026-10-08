@@ -34,7 +34,7 @@ data class Clip(val key: String, val front: DashcamFile?, val rear: DashcamFile?
 object Clips {
     /**
      * 把列表檔案依時間點配對成 [Clip]，最新的排前面。
-     * 如果整個列表都沒有後鏡頭檔（記錄器可能只列前鏡頭），就用 [FileNames.rearPathOf]
+     * 如果整個列表都沒有後鏡頭檔（reardir 還沒讀到或沒有回應），就用 [FileNames.rearPathOf]
      * 推算後鏡頭路徑，標成 guessed，下載時才確認是否存在。
      */
     fun group(files: List<DashcamFile>): List<Clip> {

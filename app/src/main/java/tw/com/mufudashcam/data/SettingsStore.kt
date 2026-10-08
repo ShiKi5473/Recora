@@ -21,7 +21,7 @@ data class AppSettings(
     val ssidPrefix: String = DashcamConfig.DEFAULT_SSID_PREFIX,
     /** 下載時預設一併下載後鏡頭。 */
     val includeRear: Boolean = true,
-    /** 僅 debug build 有效：記錄器位址覆寫（例如 10.0.2.2:8080 的假記錄器），設定後略過 Wi-Fi 綁定。 */
+    /** 僅 debug build 有效：記錄器位址覆寫（例如 127.0.0.1:8080 的假記錄器，搭配 adb reverse），設定後略過 Wi-Fi 綁定。 */
     val hostOverride: String = "",
 ) {
     val overrideActive: Boolean get() = BuildConfig.DEBUG && hostOverride.isNotBlank()

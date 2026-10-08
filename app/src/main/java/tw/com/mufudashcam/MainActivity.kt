@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * debug 用：指定假記錄器位址，例如
-     * `adb shell am start -n tw.com.mufudashcam/.MainActivity --es host_override 10.0.2.2:8080`
+     * `adb shell am start -n tw.com.mufudashcam/.MainActivity --es host_override 127.0.0.1:8080`（先 `adb reverse tcp:8080 tcp:8080`）
      * （傳空字串則取消覆寫）。
      */
     private fun handleDebugIntent(intent: Intent?) {

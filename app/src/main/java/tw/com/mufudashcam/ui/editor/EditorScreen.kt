@@ -63,6 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.data.DashcamConfig
+import tw.com.mufudashcam.data.LocalLibrary
 import tw.com.mufudashcam.ui.common.captureFrame
 import tw.com.mufudashcam.ui.player.dashcamPlayer
 import tw.com.mufudashcam.ui.player.playbackErrorMessage
@@ -87,7 +88,6 @@ fun EditorScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val baseName = remember(title) { title.substringBeforeLast('.').ifBlank { "clip" } }
 
     val player = remember {
         dashcamPlayer(context, container.http, streaming = false).apply {
@@ -145,7 +145,7 @@ fun EditorScreen(
         player.pause()
         exportProgress = 0
         val output = File(context.cacheDir, "export_${System.currentTimeMillis()}.mp4")
-        val name = "${baseName}_${nameTime(startMs)}-${nameTime(endMs)}${if (removeAudio) "_靜音" else ""}.mp4"
+        val name = LocalLibrary.editedName(title, startMs, endMs, removeAudio)
         exporter.start(Uri.parse(uri), startMs, endMs, removeAudio, output, onProgress = { exportProgress = it }) { result ->
             exportProgress = null
             scope.launch {
@@ -278,10 +278,4 @@ private const val MIN_CLIP_MS = 500L
 private fun clock(ms: Long): String {
     val t = ms.coerceAtLeast(0)
     return String.format(Locale.ROOT, "%02d:%02d.%d", t / 60000, t / 1000 % 60, t / 100 % 10)
-}
-
-/** 檔名用：0m12s3 */
-private fun nameTime(ms: Long): String {
-    val t = ms.coerceAtLeast(0)
-    return String.format(Locale.ROOT, "%dm%02ds%d", t / 60000, t / 1000 % 60, t / 100 % 10)
 }

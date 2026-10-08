@@ -49,6 +49,20 @@ class LocalLibraryTest {
     }
 
     @Test
+    fun editedNameRoundTrips() {
+        val name = LocalLibrary.editedName("EMER260923-184436R.TS", 62_500, 90_000, muted = true)
+        assertEquals("EMER260923-184436R_1m02s5-1m30s0_靜音.mp4", name)
+        val m = build(name, "Movies/MufuDashcam/")!!
+        assertEquals(MediaKind.Edited, m.kind)
+        assertEquals("EMER260923-184436R", m.source)
+        assertEquals(62_500L..90_000L, m.rangeMs)
+        assertTrue(m.muted)
+        assertEquals(Camera.Rear, m.camera)
+
+        assertFalse(build(LocalLibrary.editedName("FILE260924-091146F.TS", 0, 5_000, muted = false), "Movies/MufuDashcam/")!!.muted)
+    }
+
+    @Test
     fun editedWithUnknownNameStillEdited() {
         val m = build("my-clip.mp4", "Movies/MufuDashcam/")!!
         assertEquals(MediaKind.Edited, m.kind)

@@ -88,7 +88,7 @@ fun LiveScreen(container: AppContainer) {
     }
 }
 
-/** RTSP 即時預覽（API 文件 §4）：av5 = 主視訊 + 音訊，走 TCP 在車內 Wi-Fi 較穩。 */
+/** RTSP 即時預覽（API 文件 §4）：前鏡頭 av4（含聲音）、後鏡頭 av5（只有影像），走 TCP 在車內 Wi-Fi 較穩。 */
 @OptIn(UnstableApi::class)
 @Composable
 private fun LivePlayer(
