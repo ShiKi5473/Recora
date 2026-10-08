@@ -109,9 +109,6 @@ class DashcamApi(
     private fun isOk(body: String): Boolean =
         "OK" in body && ERROR_MARKERS.none { body.contains(it, ignoreCase = true) }
 
-    suspend fun recordOff() = set("Video", "recordoff")
-    suspend fun recordOn() = set("Video", "recordon")
-
     /**
      * 讀取錄影狀態（此系列韌體的預覽狀態：Camera.Preview.MJPEG.status.record = Recording / Standby…）。
      * 韌體不支援時回 null。

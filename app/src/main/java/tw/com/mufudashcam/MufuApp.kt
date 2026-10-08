@@ -55,7 +55,7 @@ class AppContainer(val app: Application) {
     val api = DashcamApi(http, settings)
     val connection = DashcamConnection(app, api, settings, appScope)
     val sink = MediaStoreSink(app)
-    val downloads = DownloadRepository(app, api, settings, sink, http, appScope) { connection.isConnected }
+    val downloads = DownloadRepository(app, api, sink, http, appScope) { connection.isConnected }
 
     /** 相簿內容變了（匯出、刪除）時通知相簿分頁重新整理。 */
     val libraryChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
@@ -71,21 +71,12 @@ class AppContainer(val app: Application) {
     val libraryTabRequest = MutableStateFlow<MediaKind?>(null)
 
     init {
-        // 上次 App 停止錄影後沒能恢復（當機、被系統終止、斷線）：連上時補送 recordon
         connection.onConnected = {
             // 同官方 App：每次連上都把手機時間寫入記錄器
             try {
                 api.syncTime()
             } catch (e: IOException) {
                 // 對時失敗不影響其他功能
-            }
-            if (settings.current().recordPausedByApp && !downloads.active.value) {
-                try {
-                    api.recordOn()
-                    settings.update { it.copy(recordPausedByApp = false) }
-                } catch (e: IOException) {
-                    // 下次再試
-                }
             }
         }
     }

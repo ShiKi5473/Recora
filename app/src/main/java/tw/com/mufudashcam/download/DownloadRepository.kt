@@ -8,9 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,8 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import tw.com.mufudashcam.data.DashcamFile
-import tw.com.mufudashcam.data.DiagLog
-import tw.com.mufudashcam.data.SettingsStore
 import tw.com.mufudashcam.data.api.DashcamApi
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -44,12 +40,12 @@ data class DownloadTask(
 
 /**
  * 下載佇列：一次只下載一個檔案（記錄器是單核心 + 2.4 GHz Wi-Fi，平行下載沒有幫助）。
- * 佇列開始前停止錄影、結束後一定恢復（API 文件 §3.3）；恢復失敗時保留旗標，下次連上時補送。
+ * 不送 recordoff：實測手機連線期間記錄器本來就停在 Standby，送了也沒有幫助，
+ * 萬一 recordon 前就斷線，反而可能讓記錄器離線後不再錄影。
  */
 class DownloadRepository(
     private val context: Context,
     private val api: DashcamApi,
-    private val settings: SettingsStore,
     private val sink: MediaStoreSink,
     httpClient: OkHttpClient,
     private val scope: CoroutineScope,
@@ -153,49 +149,25 @@ class DownloadRepository(
         job.start()
     }
 
-    private suspend fun runQueue() {
-        var paused = false
-        try {
-            if (settings.current().pauseRecordingOnDownload && isConnected()) {
-                ignoreIo { api.streamerStop() }
-                settings.update { it.copy(recordPausedByApp = true) }
-                paused = true
-                ignoreIo { api.recordOff() }
-                delay(RECORD_OFF_SETTLE_MS) // 讓記錄器把正在錄的那一段寫完關檔
-                ignoreIo { DiagLog.log("下載前停止錄影，目前狀態：${api.recordingStatus() ?: "記錄器沒有回報"}") }
-            }
-            coroutineScope {
-                while (true) {
-                    val next = _tasks.value.firstOrNull { it.status == TaskStatus.Queued } ?: break
-                    if (!isConnected()) {
-                        _tasks.update { list ->
-                            list.map {
-                                if (it.status == TaskStatus.Queued) {
-                                    it.copy(status = TaskStatus.Failed, message = "未連線到記錄器")
-                                } else {
-                                    it
-                                }
-                            }
+    private suspend fun runQueue() = coroutineScope {
+        while (true) {
+            val next = _tasks.value.firstOrNull { it.status == TaskStatus.Queued } ?: break
+            if (!isConnected()) {
+                _tasks.update { list ->
+                    list.map {
+                        if (it.status == TaskStatus.Queued) {
+                            it.copy(status = TaskStatus.Failed, message = "未連線到記錄器")
+                        } else {
+                            it
                         }
-                        break
-                    }
-                    val job = launch { runTask(next) }
-                    current = next.id to job
-                    job.join()
-                    current = null
-                }
-            }
-        } finally {
-            if (paused) {
-                withContext(NonCancellable) {
-                    try {
-                        api.recordOn()
-                        settings.update { it.copy(recordPausedByApp = false) }
-                    } catch (e: IOException) {
-                        // 保留 recordPausedByApp，下次連上時補送 recordon
                     }
                 }
+                break
             }
+            val job = launch { runTask(next) }
+            current = next.id to job
+            job.join()
+            current = null
         }
     }
 
@@ -265,14 +237,6 @@ class DownloadRepository(
         _tasks.update { list -> list.map { if (it.id == id) transform(it) else it } }
     }
 
-    private suspend fun ignoreIo(block: suspend () -> Unit) {
-        try {
-            block()
-        } catch (e: IOException) {
-            // 錄影控制失敗不影響下載
-        }
-    }
-
     /** 每 300 ms 取樣一次速度（平滑處理），也用來節流 UI 更新。 */
     private class SpeedMeter(private val startBytes: Long) {
         private val t0 = SystemClock.elapsedRealtime()
@@ -295,9 +259,5 @@ class DownloadRepository(
             val dt = SystemClock.elapsedRealtime() - t0
             return if (dt > 0) (bytes - startBytes) * 1000 / dt else 0
         }
-    }
-
-    private companion object {
-        const val RECORD_OFF_SETTLE_MS = 1500L
     }
 }

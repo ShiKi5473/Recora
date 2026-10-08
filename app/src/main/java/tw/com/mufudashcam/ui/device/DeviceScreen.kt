@@ -103,32 +103,15 @@ fun DeviceScreen(container: AppContainer) {
                 }
             }
 
-            if (settings.recordPausedByApp && !connected) {
-                Section("錄影") {
-                    Text("App 先前暫停了錄影，但還沒成功恢復。連上記錄器時會自動補送。")
-                }
-            }
-
             if (connected) {
                 Section("錄影") {
                     Text("目前狀態：${ui.recordStatus ?: "讀取中…"}")
                     Text(
-                        "實測此記錄器在手機連線時會停在 Standby，送出開始錄影也不會開始；" +
-                            "中斷 Wi-Fi 連線後應會由記錄器自行恢復錄影。",
+                        "實測此記錄器在手機連線時會停在 Standby（也無法遠端開始錄影），" +
+                            "中斷連線後由記錄器自行恢復錄影。用完請按「中斷連線」。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (settings.recordPausedByApp) {
-                        Text(
-                            "App 先前暫停了錄影，但還沒成功恢復。",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = vm::stopRecording, enabled = !ui.working) { Text("停止錄影") }
-                        Button(onClick = vm::startRecording, enabled = !ui.working) { Text("開始錄影") }
-                    }
                     TextButton(onClick = vm::refreshRecordStatus) { Text("重新讀取狀態") }
                 }
 
@@ -221,12 +204,6 @@ fun DeviceScreen(container: AppContainer) {
             }
 
             Section("App 設定") {
-                SwitchRow(
-                    title = "下載時暫停錄影",
-                    subtitle = "讓出頻寬、並讓正在錄的那段寫完；下載結束會自動恢復錄影",
-                    checked = settings.pauseRecordingOnDownload,
-                    onChange = { v -> vm.updateSettings { it.copy(pauseRecordingOnDownload = v) } },
-                )
                 SwitchRow(
                     title = "預設下載後鏡頭",
                     subtitle = "下載選單中「前+後鏡頭」排在第一個",

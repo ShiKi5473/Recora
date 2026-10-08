@@ -181,32 +181,11 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    fun stopRecording() = recordCommand(stop = true)
-
-    fun startRecording() = recordCommand(stop = false)
-
-    /** 送出錄影指令，等記錄器反應後再讀狀態確認。 */
-    private fun recordCommand(stop: Boolean) = command {
-        val result = if (stop) c.api.recordOff() else c.api.recordOn()
-        if (!stop) c.settings.update { it.copy(recordPausedByApp = false) }
-        kotlinx.coroutines.delay(1500)
-        val status = c.api.recordingStatus()
-        _ui.update { it.copy(recordStatus = status ?: "記錄器沒有回報") }
-        "已送出${if (stop) "停止" else "開始"}錄影，記錄器回應：${result.body.take(60)}" +
-            (status?.let { "\n目前狀態：$it" } ?: "")
-    }
-
     fun syncTime() = command {
         val now = LocalDateTime.now().withNano(0)
         val result = c.api.syncTime(now)
         val shown = now.format(DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"))
         if (result.ok) "已把記錄器時間設為 $shown" else "記錄器回應：${result.body.take(120)}"
-    }
-
-    fun resumeRecording() = command {
-        c.api.recordOn()
-        c.settings.update { it.copy(recordPausedByApp = false) }
-        "已送出恢復錄影"
     }
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
