@@ -70,7 +70,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
                 .distinctUntilChanged()
                 .collect { refreshDownloaded() }
         }
-        // 在播放器刪掉記錄器上的檔案後，列表要跟著更新
+        // 在播放器刪掉記錄器上的檔案、或格式化記憶卡後，列表要跟著更新（快取已由對方更新）
         viewModelScope.launch {
             c.dashcamChanged.collect { if (c.connection.isConnected) load() }
         }
@@ -82,13 +82,14 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         if (c.connection.isConnected) load()
     }
 
-    fun load() {
+    /** 讀取目前的資料夾；[refresh] = 不用快取，重新向記錄器讀取。 */
+    fun load(refresh: Boolean = false) {
         loadJob?.cancel()
         val folder = _ui.value.folder
         loadJob = viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {
-                c.api.listFolder(folder).collect { files ->
+                c.files.list(folder, refresh).collect { files ->
                     _ui.update { it.copy(clips = Clips.group(files)) }
                 }
             } catch (e: CancellationException) {
@@ -124,6 +125,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(working = true) }
             var failed = 0
+            val deleted = ArrayList<String>()
             for (clip in clips) {
                 var clipOk = true
                 for (f in listOfNotNull(clip.front, if (includeRear) clip.rear else null)) {
@@ -133,6 +135,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
                     } catch (e: IOException) {
                         false
                     }
+                    if (ok) deleted += f.sdPath
                     if (!ok && !f.guessed) clipOk = false
                 }
                 if (!clipOk) failed++
@@ -140,6 +143,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
             _ui.update { it.copy(working = false, selection = emptySet()) }
             val done = clips.size - failed
             _messages.trySend(if (failed == 0) "已刪除 $done 段" else "已刪除 $done 段，$failed 段失敗")
+            c.files.forget(deleted)
             load()
         }
     }

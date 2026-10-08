@@ -121,7 +121,7 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                     title = { Text("記錄器檔案") },
                     actions = {
                         if (conn is ConnState.Connected) {
-                            IconButton(onClick = vm::load, enabled = !ui.loading) {
+                            IconButton(onClick = { vm.load(refresh = true) }, enabled = !ui.loading) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "重新整理")
                             }
                         }
@@ -147,7 +147,7 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
             when {
                 conn !is ConnState.Connected -> NotConnectedPane(container)
                 ui.error != null && ui.clips.isEmpty() -> MessagePane(Icons.Filled.FolderOff, ui.error!!) {
-                    TextButton(onClick = vm::load) { Text("重試") }
+                    TextButton(onClick = { vm.load() }) { Text("重試") }
                 }
                 ui.clips.isEmpty() && !ui.loading -> MessagePane(Icons.Filled.FolderOff, "沒有檔案")
                 else -> ClipList(

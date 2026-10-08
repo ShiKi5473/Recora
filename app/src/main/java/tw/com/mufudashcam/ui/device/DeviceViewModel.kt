@@ -78,8 +78,11 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** 記憶卡總容量 / 剩餘，以及一般、緊急、停車、照片各佔多少（加總前後鏡頭檔案大小）。 */
-    fun refreshUsage() {
+    /**
+     * 記憶卡總容量 / 剩餘，以及一般、緊急、停車、照片各佔多少（加總前後鏡頭檔案大小）。
+     * 列表用與「檔案」頁共用的快取；[refresh] = 重新向記錄器讀取。
+     */
+    fun refreshUsage(refresh: Boolean = false) {
         if (_ui.value.usageLoading) return
         viewModelScope.launch {
             _ui.update { it.copy(usageLoading = true) }
@@ -92,7 +95,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             val usage = LinkedHashMap<Folder, Pair<Int, Long>>()
             for (folder in Folder.entries) {
                 try {
-                    val files = c.api.listFolder(folder).lastOrNull().orEmpty()
+                    val files = c.files.list(folder, refresh).lastOrNull().orEmpty()
                     usage[folder] = files.size to files.sumOf { it.size.coerceAtLeast(0) }
                     _ui.update { it.copy(usage = LinkedHashMap(usage)) }
                 } catch (e: IOException) {
@@ -144,7 +147,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
                     kotlinx.coroutines.delay(1000)
                 }
                 when {
-                    last.equals("READY", ignoreCase = true) -> "格式化完成，記憶卡已清空。請到「檔案」頁重新整理"
+                    last.equals("READY", ignoreCase = true) -> "格式化完成，記憶卡已清空"
                     else -> "已送出格式化，但記錄器目前狀態為 ${last ?: "無回應"}，請稍後確認"
                 }
             } catch (e: IOException) {
@@ -152,7 +155,11 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             }
             _ui.update { it.copy(formatting = false) }
             _messages.trySend(message)
+            // 不管成功與否，列表都可能已經變了
+            c.files.invalidateAll()
+            c.dashcamChanged.tryEmit(Unit)
             refreshCardStatus()
+            refreshUsage()
         }
     }
 

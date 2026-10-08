@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
+import tw.com.mufudashcam.data.DashcamFiles
 import tw.com.mufudashcam.data.SettingsStore
 import tw.com.mufudashcam.data.api.DashcamApi
 import tw.com.mufudashcam.data.net.DashcamConnection
@@ -54,6 +55,7 @@ class AppContainer(val app: Application) {
 
     val api = DashcamApi(http, settings)
     val connection = DashcamConnection(app, api, settings, appScope)
+    val files = DashcamFiles(api, connection, appScope)
     val sink = MediaStoreSink(app)
     val downloads = DownloadRepository(app, api, sink, http, appScope) { connection.isConnected }
 

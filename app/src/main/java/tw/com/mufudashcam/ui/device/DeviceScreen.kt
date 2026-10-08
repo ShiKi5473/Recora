@@ -117,7 +117,7 @@ fun DeviceScreen(container: AppContainer) {
 
                 Section("記憶卡") {
                     Text("狀態：${ui.cardStatus ?: "讀取中…"}")
-                    StorageSummary(ui, onRefresh = vm::refreshUsage)
+                    StorageSummary(ui, onRefresh = { vm.refreshUsage(refresh = true) })
                     Text(
                         "由記錄器自己格式化，格式化後的檔案系統與資料夾就是記錄器要的格式。" +
                             "所有影片（含緊急錄影）與照片都會被清除。",

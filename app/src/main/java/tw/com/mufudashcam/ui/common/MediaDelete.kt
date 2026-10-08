@@ -99,6 +99,7 @@ private suspend fun deleteOnDashcam(container: AppContainer, item: PlayItem): Ou
     return try {
         val result = container.api.delete(sdPath)
         if (result.ok) {
+            container.files.forget(listOf(sdPath))
             container.dashcamChanged.tryEmit(Unit)
             Outcome.Done("已從記錄器刪除 ${item.title}")
         } else {
