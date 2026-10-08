@@ -108,8 +108,12 @@ class DownloadService : Service() {
     }
 
     private fun postSummary() {
-        // 佇列只是暫停（串流播放中），之後會接著下載
-        if (repo.tasks.value.any { it.isActive }) return
+        val waiting = repo.tasks.value.count { it.isActive }
+        if (waiting > 0) {
+            // 串流播放中的暫停不用通知；斷線則提醒使用者還有檔案沒下載完
+            if (!repo.isHeld) postNotice("下載中斷", "與記錄器的連線中斷，重新連上後會自動繼續（還有 $waiting 個）")
+            return
+        }
         val batch = repo.tasks.value.filter { it.id !in finishedAtStart && !it.isActive }
         if (batch.isEmpty()) return
         val ok = batch.count { it.status == TaskStatus.Done }
@@ -120,9 +124,13 @@ class DownloadService : Service() {
             val cancelled = batch.count { it.status == TaskStatus.Cancelled }
             if (cancelled > 0) append("，取消 $cancelled 個")
         }
+        postNotice("下載結束", text)
+    }
+
+    private fun postNotice(title: String, text: String) {
         val notification = NotificationCompat.Builder(this, CHANNEL_DONE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("下載結束")
+            .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)
             .setContentIntent(openAppIntent())

@@ -57,7 +57,10 @@ class AppContainer(val app: Application) {
     val connection = DashcamConnection(app, api, settings, appScope)
     val files = DashcamFiles(api, connection, appScope)
     val sink = MediaStoreSink(app)
-    val downloads = DownloadRepository(app, api, sink, http, appScope) { connection.isConnected }
+    // 兩個條件都要：斷線的瞬間（狀態還沒更新但已解除綁定）不會一直重跑被 RouteGuard 擋下的檔案
+    val downloads = DownloadRepository(app, api, sink, http, appScope) {
+        connection.isConnected && connection.canReachDashcam
+    }
 
     /** 相簿內容變了（匯出、刪除）時通知相簿分頁重新整理。 */
     val libraryChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
@@ -80,6 +83,8 @@ class AppContainer(val app: Application) {
             } catch (e: IOException) {
                 // 對時失敗不影響其他功能
             }
+            // 斷線前沒下載完的檔案接著下載
+            downloads.resume()
         }
     }
 }

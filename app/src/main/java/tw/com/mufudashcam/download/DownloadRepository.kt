@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import tw.com.mufudashcam.data.DashcamFile
 import tw.com.mufudashcam.data.api.DashcamApi
+import tw.com.mufudashcam.data.net.DashcamOfflineException
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -40,6 +41,7 @@ data class DownloadTask(
 
 /**
  * 下載佇列：一次只下載一個檔案（記錄器是單核心 + 2.4 GHz Wi-Fi，平行下載沒有幫助）。
+ * 連線中斷時檔案留在佇列裡等待，重新連上（[resume]）後從中斷處接著下載。
  * 不送 recordoff：實測手機連線期間記錄器本來就停在 Standby，送了也沒有幫助，
  * 萬一 recordon 前就斷線，反而可能讓記錄器離線後不再錄影。
  */
@@ -72,6 +74,9 @@ class DownloadRepository(
     /** 因 [hold] 而中斷的那個檔案：回到等待中，而不是變成「已取消」。 */
     @Volatile
     private var pausingId: String? = null
+
+    /** 佇列目前是否因 [hold] 暫停（通知用：暫停不算下載結束）。 */
+    val isHeld: Boolean get() = holds.value > 0
 
     /** @return 實際加入佇列的檔案數 */
     fun enqueue(files: List<DashcamFile>): Int {
@@ -137,11 +142,19 @@ class DownloadRepository(
         startWorker()
     }
 
+    /** 連上記錄器時呼叫：接著下載斷線前沒下載完的檔案。 */
+    fun resume() = startWorker()
+
     @Synchronized
     private fun startWorker() {
         if (worker != null) return
         if (holds.value > 0) return
         if (_tasks.value.none { it.status == TaskStatus.Queued }) return
+        if (!isConnected()) {
+            markWaiting()
+            return
+        }
+        _tasks.update { list -> list.map { if (it.status == TaskStatus.Queued) it.copy(message = null) else it } }
         _active.value = true
         try {
             DownloadService.start(context)
@@ -154,7 +167,8 @@ class DownloadRepository(
                     runQueue()
                     // 與 startWorker 同步檢查：收尾期間新加入的檔案由同一個 worker 接著處理
                     val more = synchronized(this@DownloadRepository) {
-                        val queued = holds.value == 0 && _tasks.value.any { it.status == TaskStatus.Queued }
+                        val queued = holds.value == 0 && isConnected() &&
+                            _tasks.value.any { it.status == TaskStatus.Queued }
                         if (!queued) {
                             worker = null
                             _active.value = false
@@ -181,15 +195,7 @@ class DownloadRepository(
         while (true) {
             val next = _tasks.value.firstOrNull { it.status == TaskStatus.Queued } ?: break
             if (!isConnected()) {
-                _tasks.update { list ->
-                    list.map {
-                        if (it.status == TaskStatus.Queued) {
-                            it.copy(status = TaskStatus.Failed, message = "未連線到記錄器")
-                        } else {
-                            it
-                        }
-                    }
-                }
+                markWaiting()
                 break
             }
             // 與 hold() 同步：暫停之後不再開始下一個檔案
@@ -265,8 +271,17 @@ class DownloadRepository(
             }
             throw e
         } catch (e: Exception) {
-            updateTask(task.id) { it.copy(status = TaskStatus.Failed, message = e.message ?: e.javaClass.simpleName) }
+            if (e is DashcamOfflineException || !isConnected()) {
+                // 斷線造成的失敗：留在佇列，重新連上後從中斷處繼續
+                updateTask(task.id) { it.copy(status = TaskStatus.Queued, speedBps = 0, message = WAITING_MESSAGE) }
+            } else {
+                updateTask(task.id) { it.copy(status = TaskStatus.Failed, message = e.message ?: e.javaClass.simpleName) }
+            }
         }
+    }
+
+    private fun markWaiting() {
+        _tasks.update { list -> list.map { if (it.status == TaskStatus.Queued) it.copy(message = WAITING_MESSAGE) else it } }
     }
 
     private fun updateTask(id: String, transform: (DownloadTask) -> DownloadTask) {
@@ -295,5 +310,9 @@ class DownloadRepository(
             val dt = SystemClock.elapsedRealtime() - t0
             return if (dt > 0) (bytes - startBytes) * 1000 / dt else 0
         }
+    }
+
+    private companion object {
+        const val WAITING_MESSAGE = "等待連線：連上記錄器後會自動從中斷處繼續"
     }
 }
