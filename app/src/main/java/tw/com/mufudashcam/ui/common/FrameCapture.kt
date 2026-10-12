@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
 import android.view.SurfaceView
+import android.view.TextureView
 import androidx.annotation.OptIn
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -31,28 +32,32 @@ fun captureFrame(
     scope: CoroutineScope,
     onMessage: (String) -> Unit,
 ) {
-    val surface = playerView?.videoSurfaceView as? SurfaceView
+    val surface = playerView?.videoSurfaceView
     val video = player.videoSize
     if (surface == null || video.width <= 0 || video.height <= 0) {
         onMessage("畫面還沒準備好")
         return
     }
-    val bitmap = Bitmap.createBitmap(video.width, video.height, Bitmap.Config.ARGB_8888)
     val name = LocalLibrary.screenshotName(videoName, player.currentPosition)
-    PixelCopy.request(surface, bitmap, { result ->
-        scope.launch {
-            val message = if (result == PixelCopy.SUCCESS) {
-                try {
-                    withContext(Dispatchers.IO) { container.sink.saveJpeg(bitmap, name) }
-                    container.libraryChanged.tryEmit(Unit)
-                    "已存截圖 $name 到 Pictures/${DashcamConfig.LOCAL_DIR}"
-                } catch (e: Exception) {
-                    "截圖儲存失敗：${e.message}"
-                }
-            } else {
-                "截圖失敗（$result）"
-            }
-            onMessage(message)
+    fun save(bitmap: Bitmap) = scope.launch {
+        val message = try {
+            withContext(Dispatchers.IO) { container.sink.saveJpeg(bitmap, name) }
+            container.libraryChanged.tryEmit(Unit)
+            "已存截圖 $name 到 Pictures/${DashcamConfig.LOCAL_DIR}"
+        } catch (e: Exception) {
+            "截圖儲存失敗：${e.message}"
         }
-    }, Handler(Looper.getMainLooper()))
+        onMessage(message)
+    }
+    when (surface) {
+        // 播放畫面（可縮放）用 TextureView：取的是整張原始畫面，不受目前的放大範圍影響
+        is TextureView -> surface.getBitmap(video.width, video.height)?.let(::save) ?: onMessage("截圖失敗")
+        is SurfaceView -> {
+            val bitmap = Bitmap.createBitmap(video.width, video.height, Bitmap.Config.ARGB_8888)
+            PixelCopy.request(surface, bitmap, { result ->
+                if (result == PixelCopy.SUCCESS) save(bitmap) else onMessage("截圖失敗（$result）")
+            }, Handler(Looper.getMainLooper()))
+        }
+        else -> onMessage("畫面還沒準備好")
+    }
 }

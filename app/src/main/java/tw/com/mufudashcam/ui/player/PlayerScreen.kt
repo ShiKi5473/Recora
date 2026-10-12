@@ -58,6 +58,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import tw.com.mufudashcam.ui.common.FullscreenEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.unit.IntSize
+import tw.com.mufudashcam.ui.common.zoomGestures
+import tw.com.mufudashcam.ui.common.ZoomState
+import tw.com.mufudashcam.R
+import android.view.LayoutInflater
 
 /**
  * 播放本機檔（content://）或直接從記錄器串流（http://，TS 檔靠 Range 快轉）。
@@ -192,20 +198,41 @@ fun PlayerScreen(
 
     FullscreenEffect(fullscreen) { fullscreen = false }
 
-    Box(Modifier.fillMaxSize().background(Color.Black).swipeToJump(::jump)) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    setShowSubtitleButton(false)
-                    // 設了監聽器，控制列才會出現全螢幕按鈕
-                    setFullscreenButtonClickListener { fullscreen = it }
-                    playerView = this
-                }
-            },
-            update = { it.setFullscreenButtonState(fullscreen) },
-            modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().safeDrawingPadding(),
-        )
+    // 雙指放大影片（例如看車牌）；換到別段時還原
+    val zoom = remember { ZoomState() }
+    LaunchedEffect(current.url) { zoom.reset() }
+    zoom.contentSize = { playerView?.videoSurfaceView?.let { IntSize(it.width, it.height) } ?: IntSize.Zero }
+
+    Box(Modifier.fillMaxSize().background(Color.Black).swipeToJump(enabled = { !zoom.isZoomed }, onJump = ::jump)) {
+        Box(
+            (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().safeDrawingPadding())
+                // Initial：搶在 PlayerView 之前處理，捏合時不會順便切換控制列；下方進度條的拖曳不拿來平移
+                .zoomGestures(zoom, PointerEventPass.Initial) { pos, size -> pos.y > size.height * 0.75f },
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    // TextureView 版的 PlayerView 才能縮放影像（見 player_view_texture.xml）
+                    (LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null) as PlayerView).apply {
+                        this.player = player
+                        setShowSubtitleButton(false)
+                        // 設了監聽器，控制列才會出現全螢幕按鈕
+                        setFullscreenButtonClickListener { fullscreen = it }
+                        playerView = this
+                    }
+                },
+                update = {
+                    it.setFullscreenButtonState(fullscreen)
+                    // 只縮放影像本身，控制列維持原樣
+                    it.videoSurfaceView?.apply {
+                        scaleX = zoom.scale
+                        scaleY = zoom.scale
+                        translationX = zoom.offset.x
+                        translationY = zoom.offset.y
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         if (!fullscreen) {
             Row(
                 Modifier.fillMaxWidth().safeDrawingPadding().padding(4.dp),
@@ -218,7 +245,7 @@ fun PlayerScreen(
                     Text(current.title, color = Color.White, style = MaterialTheme.typography.titleSmall)
                     if (queue.size > 1) {
                         Text(
-                            "${index + 1} / ${queue.size}　左右滑動切換",
+                            "${index + 1} / ${queue.size}　左右滑動切換・雙指放大",
                             color = Color.White.copy(alpha = 0.7f),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -290,17 +317,22 @@ fun PlayerScreen(
 /**
  * 左右滑動切換影片：在 Initial 階段觀察手勢（不攔截），播放器的點擊、控制列照常運作；
  * 從畫面下方 1/4（進度條所在）開始的拖曳不算，才不會跟拖曳進度條衝突。
+ * 放大中（[enabled] 為 false）或用了兩根以上手指（捏合縮放）時不切換。
  */
-private fun Modifier.swipeToJump(onJump: (Int) -> Unit): Modifier = pointerInput(Unit) {
+private fun Modifier.swipeToJump(enabled: () -> Boolean, onJump: (Int) -> Unit): Modifier = pointerInput(Unit) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        if (down.position.y > size.height * 0.75f) return@awaitEachGesture
+        if (down.position.y > size.height * 0.75f || !enabled()) return@awaitEachGesture
         var last = down.position
+        var multiTouch = false
         while (true) {
-            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.changes.count { it.pressed } > 1) multiTouch = true
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
             last = change.position
             if (!change.pressed) break
         }
+        if (multiTouch || !enabled()) return@awaitEachGesture
         val dx = last.x - down.position.x
         val dy = last.y - down.position.y
         if (abs(dx) > 80.dp.toPx() && abs(dx) > 2 * abs(dy)) onJump(if (dx < 0) 1 else -1)

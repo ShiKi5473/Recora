@@ -16,7 +16,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,11 +42,22 @@ fun PhotoDialog(photos: List<PlayItem>, startIndex: Int, onDismiss: () -> Unit) 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                val zoom = remember { ZoomState() }
+                // 換到別張後，這張回到原本大小
+                LaunchedEffect(pager.settledPage) { if (pager.settledPage != page) zoom.reset() }
                 AsyncImage(
                     model = photos[page].url,
                     contentDescription = photos[page].title,
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize()
+                        .zoomGestures(zoom)
+                        .pointerInput(zoom) { detectTapGestures(onDoubleTap = { zoom.toggle(it) }) }
+                        .graphicsLayer {
+                            scaleX = zoom.scale
+                            scaleY = zoom.scale
+                            translationX = zoom.offset.x
+                            translationY = zoom.offset.y
+                        },
                 )
             }
             Row(
@@ -56,7 +72,7 @@ fun PhotoDialog(photos: List<PlayItem>, startIndex: Int, onDismiss: () -> Unit) 
                     Text(photos[pager.currentPage].title, color = Color.White, style = MaterialTheme.typography.titleSmall)
                     if (photos.size > 1) {
                         Text(
-                            "${pager.currentPage + 1} / ${photos.size}　左右滑動切換",
+                            "${pager.currentPage + 1} / ${photos.size}　左右滑動切換・雙指或點兩下放大",
                             color = Color.White.copy(alpha = 0.7f),
                             style = MaterialTheme.typography.bodySmall,
                         )
