@@ -1,13 +1,20 @@
 package tw.com.mufudashcam
 
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import tw.com.mufudashcam.data.DashcamConfig
+import tw.com.mufudashcam.data.ThemeMode
 import tw.com.mufudashcam.data.api.RtspProbe
 import tw.com.mufudashcam.ui.AppRoot
 import tw.com.mufudashcam.ui.theme.MufuTheme
@@ -19,7 +26,21 @@ class MainActivity : ComponentActivity() {
         val container = (application as MufuApp).container
         handleDebugIntent(intent)
         setContent {
-            MufuTheme {
+            val settings by container.settings.state.collectAsStateWithLifecycle()
+            val dark = when (settings.themeMode) {
+                ThemeMode.System -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            // 狀態列／導覽列圖示的深淺跟著 App 的主題，而不是系統的
+            DisposableEffect(dark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
+                )
+                onDispose { }
+            }
+            MufuTheme(dark = dark, dynamicColor = settings.dynamicColor) {
                 AppRoot(container)
             }
         }
@@ -59,5 +80,9 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val EXTRA_HOST_OVERRIDE = "host_override"
         const val EXTRA_PROBE_RTSP = "probe_rtsp"
+
+        // 與 enableEdgeToEdge() 預設的導覽列遮罩相同
+        val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+        val DARK_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
     }
 }

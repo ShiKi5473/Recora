@@ -11,14 +11,22 @@ import tw.com.mufudashcam.data.PlayItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import tw.com.mufudashcam.data.DashcamFiles
+import tw.com.mufudashcam.data.DiagLog
 import tw.com.mufudashcam.data.SettingsStore
 import tw.com.mufudashcam.data.api.DashcamApi
 import tw.com.mufudashcam.data.net.DashcamConnection
 import tw.com.mufudashcam.data.net.RouteGuard
+import tw.com.mufudashcam.download.DownloadFolders
 import tw.com.mufudashcam.download.DownloadRepository
+import tw.com.mufudashcam.download.EventBackup
 import tw.com.mufudashcam.download.MediaStoreSink
+import tw.com.mufudashcam.download.QueueStore
+import tw.com.mufudashcam.ui.common.MediaThumbFetcher
+import tw.com.mufudashcam.ui.editor.ClipExporter
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -30,13 +38,22 @@ class MufuApp : Application(), ImageLoaderFactory {
         super.onCreate()
         container = AppContainer(this)
         container.connection.start()
+        // 上次匯出到一半 App 被關掉時留下的暫存檔
+        container.appScope.launch(Dispatchers.IO) { ClipExporter.cleanStale(this@MufuApp) }
     }
 
-    /** 相簿縮圖要能解影片的某一格（coil-video）；記錄器上的照片走共用的 client（受 RouteGuard 保護）。 */
+    /**
+     * 相簿縮圖用系統的縮圖快取（[MediaThumbFetcher]），其他影片能解出某一格（coil-video）；
+     * 記錄器上的照片走共用的 client（受 RouteGuard 保護）。
+     */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
             .okHttpClient { container.http }
-            .components { add(VideoFrameDecoder.Factory()) }
+            .components {
+                add(MediaThumbFetcher.Factory())
+                add(MediaThumbFetcher.Key())
+                add(VideoFrameDecoder.Factory())
+            }
             .crossfade(true)
             .build()
 }
@@ -57,10 +74,15 @@ class AppContainer(val app: Application) {
     val connection = DashcamConnection(app, api, settings, appScope)
     val files = DashcamFiles(api, connection, appScope)
     val sink = MediaStoreSink(app)
-    // 兩個條件都要：斷線的瞬間（狀態還沒更新但已解除綁定）不會一直重跑被 RouteGuard 擋下的檔案
-    val downloads = DownloadRepository(app, api, sink, http, appScope) {
+    val downloads = DownloadRepository(
+        app, api, sink, http, appScope,
+        queueStore = QueueStore(File(app.filesDir, "download_queue.tsv")),
+        subdirOf = { file -> DownloadFolders.subdir(file, settings.state.value.downloadSubfolder) },
+    ) {
+        // 兩個條件都要：斷線的瞬間（狀態還沒更新但已解除綁定）不會一直重跑被 RouteGuard 擋下的檔案
         connection.isConnected && connection.canReachDashcam
     }
+    val eventBackup = EventBackup(files, sink, downloads, settings)
 
     /** 相簿內容變了（匯出、刪除）時通知相簿分頁重新整理。 */
     val libraryChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
@@ -83,7 +105,16 @@ class AppContainer(val app: Application) {
             } catch (e: IOException) {
                 // 對時失敗不影響其他功能
             }
-            // 斷線前沒下載完的檔案接著下載
+            // App 設定：連上時自動備份還沒下載的緊急錄影（先讀完列表再開始下載，不跟下載搶記錄器的連線）
+            if (settings.current().autoBackupEvents) {
+                try {
+                    val added = eventBackup.run()
+                    if (added > 0) DiagLog.log("自動備份緊急錄影：加入 $added 個檔案")
+                } catch (e: IOException) {
+                    DiagLog.log("自動備份緊急錄影失敗：${e.message}")
+                }
+            }
+            // 斷線前（或 App 被關掉前）沒下載完的檔案接著下載
             downloads.resume()
         }
     }

@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -51,6 +52,22 @@ class ZoomState(private val maxScale: Float = 5f) {
         scale = newScale
         offset = clamp(raw)
         if (!isZoomed) reset()
+    }
+
+    /**
+     * 畫面上看得到的那一部分，以內容的比例表示（0..1，左上為原點；沒放大時是整張）。
+     * 內容會被裁在原本的範圍內，所以看得到的寬高 = 原本的 1 / [scale]。
+     */
+    fun visibleRect(): Rect {
+        val size = contentSize()
+        if (!isZoomed || size.width <= 0 || size.height <= 0) return Rect(0f, 0f, 1f, 1f)
+        val half = 0.5f / scale
+        val cx = 0.5f - offset.x / (scale * size.width)
+        val cy = 0.5f - offset.y / (scale * size.height)
+        return Rect(
+            (cx - half).coerceIn(0f, 1f), (cy - half).coerceIn(0f, 1f),
+            (cx + half).coerceIn(0f, 1f), (cy + half).coerceIn(0f, 1f),
+        )
     }
 
     /** 雙擊：沒放大就以 [at] 為中心放大，已放大就還原。 */

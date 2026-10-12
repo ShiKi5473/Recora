@@ -23,9 +23,11 @@ import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.data.Clip
 import tw.com.mufudashcam.data.Clips
 import tw.com.mufudashcam.data.DashcamFile
+import tw.com.mufudashcam.data.DownloadChoice
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.net.ConnState
 import tw.com.mufudashcam.download.TaskStatus
+import tw.com.mufudashcam.ui.common.DateGroups
 import java.io.IOException
 
 data class BrowserUi(
@@ -37,11 +39,14 @@ data class BrowserUi(
     /** 已下載到手機的檔案：大寫檔名 → 大小。 */
     val downloaded: Map<String, Long> = emptyMap(),
     val working: Boolean = false,
+    /** 只顯示還有檔案沒下載的片段。 */
+    val onlyMissing: Boolean = false,
 ) {
-    fun isDownloaded(file: DashcamFile): Boolean {
-        val local = downloaded[file.name.uppercase()] ?: return false
-        return file.size <= 0 || local == file.size
-    }
+    fun isDownloaded(file: DashcamFile): Boolean = Clips.isDownloaded(file, downloaded)
+
+    /** 畫面上顯示的片段（套用「未下載」篩選；[includeRear] = 預設下載後鏡頭，沒下載後鏡頭也算未下載）。 */
+    fun visibleClips(includeRear: Boolean): List<Clip> =
+        if (onlyMissing) clips.filter { Clips.isMissing(it, includeRear, downloaded) } else clips
 }
 
 class BrowserViewModel(private val c: AppContainer) : ViewModel() {
@@ -53,8 +58,14 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     private var loadJob: Job? = null
 
+    /** 使用者自己換過分頁：之後讀到設定也不改回「開啟時顯示的資料夾」。 */
+    private var folderPicked = false
+
     init {
         viewModelScope.launch {
+            // 開啟時顯示的資料夾（App 設定）；讀到設定後才開始讀列表
+            val start = c.settings.current().startFolder
+            if (!folderPicked) _ui.update { it.copy(folder = start) }
             c.connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
                 if (connected) {
                     load()
@@ -77,6 +88,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     fun selectFolder(folder: Folder) {
+        folderPicked = true
         if (folder == _ui.value.folder) return
         _ui.update { it.copy(folder = folder, clips = emptyList(), selection = emptySet(), error = null) }
         if (c.connection.isConnected) load()
@@ -110,15 +122,56 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     fun clearSelection() = _ui.update { it.copy(selection = emptySet()) }
 
+    /** 頭尾之間全選（依畫面順序）。 */
+    fun selectRange(orderedKeys: List<String>) = _ui.update { it.copy(selection = DateGroups.selectRange(orderedKeys, it.selection)) }
+
+    fun setOnlyMissing(on: Boolean) = _ui.update { it.copy(onlyMissing = on, selection = emptySet()) }
+
+    /** 選取畫面上還有檔案沒下載的片段。 */
+    fun selectMissing(visible: List<Clip>, includeRear: Boolean) {
+        val keys = visible.filter { Clips.isMissing(it, includeRear, _ui.value.downloaded) }.map { it.key }
+        _ui.update { it.copy(selection = keys.toSet()) }
+        if (keys.isEmpty()) _messages.trySend("這裡的檔案都下載過了")
+    }
+
+    /** 選取畫面上已經全部下載到手機的片段，接著可以從記錄器刪除、釋放記憶卡空間。 */
+    fun selectBackedUp(visible: List<Clip>) {
+        val keys = visible.filter { Clips.isBackedUp(it, _ui.value.downloaded) }.map { it.key }
+        _ui.update { it.copy(selection = keys.toSet()) }
+        _messages.trySend(if (keys.isEmpty()) "沒有已經完整下載的片段" else "已選取 ${keys.size} 段已下載到手機的片段，可以從記錄器刪除")
+    }
+
+    /** 把還沒下載的緊急錄影全部加入下載佇列。 */
+    fun backupEvents() {
+        viewModelScope.launch {
+            _ui.update { it.copy(working = true) }
+            val message = try {
+                val added = c.eventBackup.run()
+                if (added > 0) "已加入 $added 個緊急錄影檔案到下載佇列" else "緊急錄影都已經下載過了"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                "讀取緊急錄影失敗：${e.message}"
+            } finally {
+                _ui.update { it.copy(working = false) }
+            }
+            _messages.trySend(message)
+        }
+    }
+
     fun selectedClips(): List<Clip> = _ui.value.let { u -> u.clips.filter { it.key in u.selection } }
 
-    fun download(clips: List<Clip>, includeRear: Boolean) {
-        val files = clips.flatMap { clip ->
-            listOfNotNull(clip.front, if (includeRear) clip.rear else null).ifEmpty { listOfNotNull(clip.rear) }
-        }
+    fun download(clips: List<Clip>, choice: DownloadChoice) {
+        val files = clips.flatMap { Clips.filesFor(it, choice) }
         val added = c.downloads.enqueue(files)
         clearSelection()
-        _messages.trySend(if (added > 0) "已加入 $added 個檔案到下載佇列" else "這些檔案已在下載佇列中")
+        _messages.trySend(
+            when {
+                added > 0 -> "已加入 $added 個檔案到下載佇列"
+                files.isEmpty() -> "選取的片段沒有${if (choice == DownloadChoice.RearOnly) "後鏡頭" else ""}檔案"
+                else -> "這些檔案已在下載佇列中"
+            },
+        )
     }
 
     fun delete(clips: List<Clip>, includeRear: Boolean) {

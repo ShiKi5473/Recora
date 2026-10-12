@@ -64,6 +64,40 @@ class FileNamesTest {
     }
 
     @Test
+    fun counterpartPathBothWays() {
+        assertEquals(
+            "/mnt/mmc/Video/R/FILE260923-131459R.TS",
+            FileNames.counterpartPath("/mnt/mmc/Video/F/FILE260923-131459F.TS"),
+        )
+        assertEquals(
+            "/mnt/mmc/Emergency/F/EMER260923-131459F.TS",
+            FileNames.counterpartPath("/mnt/mmc/Emergency/R/EMER260923-131459R.TS"),
+        )
+        assertNull(FileNames.counterpartPath("/mnt/mmc/Video/FILE260923-131459.TS"))
+    }
+
+    @Test
+    fun counterpartNameKeepsTheRest() {
+        assertEquals("FILE260923-131459R.TS", FileNames.counterpartName("FILE260923-131459F.TS"))
+        assertEquals("FILE260923-131459F.TS", FileNames.counterpartName("FILE260923-131459R.TS"))
+        // 剪輯檔、截圖檔：換鏡頭，片段與位置不變
+        assertEquals(
+            "EMER260923-184436R_0m10s0-0m15s0_靜音.mp4",
+            FileNames.counterpartName("EMER260923-184436F_0m10s0-0m15s0_靜音.mp4"),
+        )
+        assertEquals("FILE260923-131459f_0m15s0.jpg", FileNames.counterpartName("FILE260923-131459r_0m15s0.jpg"))
+        assertNull(FileNames.counterpartName("my-clip.mp4"))
+        assertNull(FileNames.counterpartName("FILE260923-131459.TS"))
+    }
+
+    @Test
+    fun cameraOfNameIncludingEditedNames() {
+        assertEquals(Camera.Front, FileNames.cameraOfName("FILE260923-131459F.TS"))
+        assertEquals(Camera.Rear, FileNames.cameraOfName("EMER260923-184436R_0m10s0-0m15s0.mp4"))
+        assertNull(FileNames.cameraOfName("my-clip.mp4"))
+    }
+
+    @Test
     fun cameraFromPath() {
         assertEquals(Camera.Rear, FileNames.cameraOf("/mnt/mmc/Video/R/FILE260923-131459R.TS"))
         assertEquals(Camera.Front, FileNames.cameraOf("/mnt/mmc/Video/F/FILE260923-131459F.TS"))

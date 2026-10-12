@@ -31,7 +31,45 @@ data class Clip(val key: String, val front: DashcamFile?, val rear: DashcamFile?
     }
 }
 
+/** 下載哪個鏡頭。 */
+enum class DownloadChoice(val label: String) {
+    Both("下載前+後鏡頭"),
+    FrontOnly("只下載前鏡頭"),
+    RearOnly("只下載後鏡頭"),
+}
+
 object Clips {
+    /** 這一段要下載的檔案；沒有前鏡頭時「只下載前鏡頭」改下載後鏡頭，「只下載後鏡頭」則不退而求其次。 */
+    fun filesFor(clip: Clip, choice: DownloadChoice): List<DashcamFile> = when (choice) {
+        DownloadChoice.Both -> clip.files
+        DownloadChoice.FrontOnly -> listOfNotNull(clip.front ?: clip.rear)
+        DownloadChoice.RearOnly -> listOfNotNull(clip.rear)
+    }
+
+    /** 依「預設下載後鏡頭」設定，這一段要下載的檔案。 */
+    fun filesFor(clip: Clip, includeRear: Boolean): List<DashcamFile> =
+        filesFor(clip, if (includeRear) DownloadChoice.Both else DownloadChoice.FrontOnly)
+
+    /** 已經下載到手機（[downloaded]：大寫檔名 → 大小）且大小相符；記錄器上大小未知時只看檔名。 */
+    fun isDownloaded(file: DashcamFile, downloaded: Map<String, Long>): Boolean {
+        val local = downloaded[file.name.uppercase()] ?: return false
+        return file.size <= 0 || local == file.size
+    }
+
+    /** 這一段還有檔案沒下載（推算出來的後鏡頭不算，不一定存在）。 */
+    fun isMissing(clip: Clip, includeRear: Boolean, downloaded: Map<String, Long>): Boolean =
+        filesFor(clip, includeRear).any { !it.guessed && !isDownloaded(it, downloaded) }
+
+    /** 記錄器上這一段的檔案（推算出來的後鏡頭除外）全都下載到手機了：可以放心從記錄器刪除。 */
+    fun isBackedUp(clip: Clip, downloaded: Map<String, Long>): Boolean {
+        val listed = clip.files.filter { !it.guessed }
+        return listed.isNotEmpty() && listed.all { isDownloaded(it, downloaded) }
+    }
+
+    /** 備份用：還沒下載的檔案（推算出來的後鏡頭不算，免得每次都加入一個下載時才發現不存在的檔案）。 */
+    fun notDownloaded(clips: List<Clip>, includeRear: Boolean, downloaded: Map<String, Long>): List<DashcamFile> =
+        clips.flatMap { filesFor(it, includeRear) }.filter { !it.guessed && !isDownloaded(it, downloaded) }
+
     /**
      * 把列表檔案依時間點配對成 [Clip]，最新的排前面。
      * 如果整個列表都沒有後鏡頭檔（reardir 還沒讀到或沒有回應），就用 [FileNames.rearPathOf]

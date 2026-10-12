@@ -25,7 +25,9 @@ import tw.com.mufudashcam.data.Camera
 import tw.com.mufudashcam.data.LocalLibrary
 import tw.com.mufudashcam.data.LocalMedia
 import tw.com.mufudashcam.data.MediaKind
+import tw.com.mufudashcam.download.MediaStoreSink
 import tw.com.mufudashcam.download.TaskStatus
+import tw.com.mufudashcam.ui.common.DateGroups
 
 data class LibraryUi(
     val items: List<LocalMedia> = emptyList(),
@@ -35,6 +37,8 @@ data class LibraryUi(
     val cameraFilter: Camera? = null,
     /** 多選中的檔案（uri）；非空 = 選取模式。 */
     val selection: Set<String> = emptySet(),
+    /** 「整理空間」用：沒下載完、也不在下載佇列裡的暫存檔；null = 還沒讀。 */
+    val leftovers: List<MediaStoreSink.Entry>? = null,
 ) {
     /** 目前分頁、篩選後被選取的檔案。 */
     val selectedItems: List<LocalMedia> get() = of(tab).filter { it.uri in selection }
@@ -83,6 +87,9 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
 
     fun clearSelection() = _ui.update { it.copy(selection = emptySet()) }
 
+    /** 頭尾之間全選（依畫面順序）。 */
+    fun selectRange(orderedUris: List<String>) = _ui.update { it.copy(selection = DateGroups.selectRange(orderedUris, it.selection)) }
+
     fun refresh() {
         viewModelScope.launch {
             _ui.update { it.copy(loading = true) }
@@ -92,6 +99,26 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
             // 已經不在相簿裡的檔案（例如被刪掉）從選取中移除
             val present = items.mapTo(HashSet()) { it.uri }
             _ui.update { u -> u.copy(items = items, loading = false, selection = u.selection.filterTo(HashSet()) { it in present }) }
+        }
+    }
+
+    /** 讀取沒下載完的暫存檔（下載佇列裡還在等的是續傳的依據，不算）。 */
+    fun loadLeftovers() {
+        viewModelScope.launch {
+            val active = c.downloads.tasks.value.filter { it.isActive }.mapTo(HashSet()) { it.file.name.uppercase() }
+            val pending = withContext(Dispatchers.IO) {
+                runCatching { c.sink.listPending() }.getOrDefault(emptyList())
+            }.filter { it.name.uppercase() !in active }
+            _ui.update { it.copy(leftovers = pending) }
+        }
+    }
+
+    /** 清除沒下載完的暫存檔（之後再下載同一個檔案要從頭開始）。 */
+    fun clearLeftovers(entries: List<MediaStoreSink.Entry>) {
+        viewModelScope.launch {
+            val deleted = withContext(Dispatchers.IO) { entries.count { runCatching { c.sink.delete(it.uri) }.isSuccess } }
+            _messages.trySend("已清除 $deleted 個未完成的下載")
+            loadLeftovers()
         }
     }
 

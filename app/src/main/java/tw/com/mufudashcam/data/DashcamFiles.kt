@@ -63,6 +63,10 @@ class DashcamFiles(
         }
     }
 
+    /** 從快取找記錄器上的檔案（例如在播放畫面加入下載）；那個資料夾還沒讀過就回 null。 */
+    fun find(sdPath: String): DashcamFile? =
+        cache.values.firstNotNullOfOrNull { list -> list.firstOrNull { it.sdPath == sdPath } }
+
     /** 從快取移除已刪除的檔案，不必重新讀整個資料夾。 */
     fun forget(sdPaths: Collection<String>) {
         if (sdPaths.isEmpty()) return

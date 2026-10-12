@@ -63,6 +63,20 @@ class LocalLibraryTest {
     }
 
     @Test
+    fun duplicateNamesRenamedByMediaStoreStillParsed() {
+        // 同一範圍匯出兩次：MediaStore 自動改名成 "… (1).mp4"
+        val m = build("EMER260923-184436F_0m10s0-0m15s0_靜音 (1).mp4", "Movies/MufuDashcam/")!!
+        assertEquals("EMER260923-184436F", m.source)
+        assertEquals(10_000L..15_000L, m.rangeMs)
+        assertTrue(m.muted)
+        assertEquals(Camera.Front, m.camera)
+        // 同一位置截圖兩次
+        val shot = build("EMER260923-184436R_0m15s0 (2).jpg", "Pictures/MufuDashcam/")!!
+        assertEquals(LocalDateTime.of(2026, 9, 23, 18, 44, 51), shot.time)
+        assertEquals(Camera.Rear, shot.camera)
+    }
+
+    @Test
     fun editedWithUnknownNameStillEdited() {
         val m = build("my-clip.mp4", "Movies/MufuDashcam/")!!
         assertEquals(MediaKind.Edited, m.kind)
@@ -110,6 +124,17 @@ class LocalLibraryTest {
     }
 
     @Test
+    fun recordingStartOfOriginalAndEdited() {
+        assertEquals(LocalDateTime.of(2026, 9, 23, 18, 44, 36), LocalLibrary.recordingStart("EMER260923-184436F.TS"))
+        // 剪輯檔 = 來源開始時間 + 片段起點
+        assertEquals(
+            LocalDateTime.of(2026, 9, 23, 18, 45, 38, 500_000_000),
+            LocalLibrary.recordingStart("EMER260923-184436F_1m02s5-1m30s0_靜音 (1).mp4"),
+        )
+        assertNull(LocalLibrary.recordingStart("my-clip.mp4"))
+    }
+
+    @Test
     fun cameraFromNames() {
         assertEquals(Camera.Front, build("EMER260923-184436F.TS", "Movies/MufuDashcam/")!!.camera)
         assertEquals(Camera.Rear, build("EMER260923-184436R.TS", "Movies/MufuDashcam/")!!.camera)
@@ -120,6 +145,34 @@ class LocalLibraryTest {
         assertEquals(Camera.Front, build("IMG260923-162041F.JPG", "Pictures/MufuDashcam/")!!.camera)
         // 分辨不出
         assertNull(build("my-clip.mp4", "Movies/MufuDashcam/")!!.camera)
+    }
+
+    @Test
+    fun adjacentSameCameraNearestInTime() {
+        val event = build("EMER260923-184436F.TS", "Movies/MufuDashcam/")!!
+        val after = build("FILE260923-184736F.TS", "Movies/MufuDashcam/")!!
+        val later = build("FILE260923-185036F.TS", "Movies/MufuDashcam/")!!
+        val before = build("FILE260923-184136F.TS", "Movies/MufuDashcam/")!!
+        val rear = build("FILE260923-184736R.TS", "Movies/MufuDashcam/")!!
+        val edited = build("FILE260923-184736F_0m00s0-0m10s0.mp4", "Movies/MufuDashcam/")!!
+        val all = listOf(later, rear, after, edited, event, before)
+        // 緊急錄影後面接的是一般錄影（前綴不同也算）；只找同鏡頭的原始檔
+        assertEquals(after, LocalLibrary.adjacent(all, event.name, forward = true))
+        assertEquals(before, LocalLibrary.adjacent(all, event.name, forward = false))
+        assertNull(LocalLibrary.adjacent(all, later.name, forward = true))
+        assertNull(LocalLibrary.adjacent(all, "my-clip.mp4", forward = true))
+    }
+
+    @Test
+    fun cleanupCandidates() {
+        val edited = build("EMER260923-184436F_0m10s0-0m15s0.mp4", "Movies/MufuDashcam/")!!
+        val source = build("EMER260923-184436F.TS", "Movies/MufuDashcam/緊急/")!!
+        val other = build("FILE260920-080000F.TS", "Movies/MufuDashcam/")!!
+        val photo = build("EMER260923-184436F_0m15s0.jpg", "Pictures/MufuDashcam/")!!
+        val all = listOf(edited, source, other, photo)
+        assertEquals(listOf(source), LocalLibrary.editedOriginals(all))
+        // 只算原始檔，看錄影時間
+        assertEquals(listOf(other), LocalLibrary.originalsRecordedBefore(all, LocalDateTime.of(2026, 9, 22, 0, 0)))
     }
 
     @Test

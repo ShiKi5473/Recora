@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -30,6 +32,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,18 +67,23 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.data.Camera
 import tw.com.mufudashcam.data.Clip
 import tw.com.mufudashcam.data.PlayItem
 import tw.com.mufudashcam.data.DashcamFile
+import tw.com.mufudashcam.data.DownloadChoice
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.net.ConnState
 import tw.com.mufudashcam.ui.Formats
 import tw.com.mufudashcam.ui.common.ConnectionChip
+import tw.com.mufudashcam.ui.common.DateGroups
+import tw.com.mufudashcam.ui.common.DateJumpButton
 import tw.com.mufudashcam.ui.common.MessagePane
 import tw.com.mufudashcam.ui.common.PhotoDialog
 import tw.com.mufudashcam.ui.common.NotConnectedPane
+import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,11 +93,16 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
     val conn by container.connection.state.collectAsStateWithLifecycle()
     val settings by container.settings.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var pendingDelete by remember { mutableStateOf<List<Clip>?>(null) }
     var viewingPhoto by remember { mutableStateOf<DashcamFile?>(null) }
 
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(it) } }
 
+    // 畫面上的片段（套用「未下載」篩選），依日期分組
+    val clips = remember(ui.clips, ui.onlyMissing, ui.downloaded, settings.includeRear) { ui.visibleClips(settings.includeRear) }
+    val byDate = remember(clips) { clips.groupBy { it.date } }
     val selectionMode = ui.selection.isNotEmpty()
     val play: (DashcamFile) -> Unit = { file ->
         if (file.isImage) {
@@ -96,7 +110,7 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
         } else {
             vm.resolvePlayback(file) { url ->
                 // 左右滑動的清單：同資料夾、同鏡頭，順序同畫面；目前這段用剛解析出的網址（可能是已下載的本機檔）
-                container.playQueue = ui.clips
+                container.playQueue = clips
                     .mapNotNull { clip -> if (file.camera == Camera.Rear) clip.rear else clip.front }
                     .filter { !it.isImage }
                     .map { f -> PlayItem(if (f.sdPath == file.sdPath) url else vm.thumbnailUrl(f), f.name, f.sdPath) }
@@ -113,7 +127,8 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                     count = ui.selection.size,
                     includeRearDefault = settings.includeRear,
                     onClose = vm::clearSelection,
-                    onDownload = { rear -> vm.download(vm.selectedClips(), rear) },
+                    onSelectRange = { vm.selectRange(clips.map { it.key }) },
+                    onDownload = { choice -> vm.download(vm.selectedClips(), choice) },
                     onDelete = { pendingDelete = vm.selectedClips() },
                 )
             } else {
@@ -121,9 +136,18 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                     title = { Text("記錄器檔案") },
                     actions = {
                         if (conn is ConnState.Connected) {
+                            DateJumpButton(byDate.map { (date, group) -> Formats.date(date) to group.size }) { group ->
+                                val index = DateGroups.headerIndex(byDate.values.map { it.size }, group)
+                                scope.launch { listState.animateScrollToItem(index) }
+                            }
                             IconButton(onClick = { vm.load(refresh = true) }, enabled = !ui.loading) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "重新整理")
                             }
+                            BrowserMenu(
+                                onSelectMissing = { vm.selectMissing(clips, settings.includeRear) },
+                                onSelectBackedUp = { vm.selectBackedUp(clips) },
+                                onBackupEvents = vm::backupEvents,
+                            )
                         }
                         ConnectionChip(container)
                     },
@@ -141,6 +165,15 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                     )
                 }
             }
+            if (conn is ConnState.Connected) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(selected = !ui.onlyMissing, onClick = { vm.setOnlyMissing(false) }, label = { Text("全部") })
+                    FilterChip(selected = ui.onlyMissing, onClick = { vm.setOnlyMissing(true) }, label = { Text("未下載") })
+                }
+            }
             if (ui.loading || ui.working) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
@@ -150,7 +183,14 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                     TextButton(onClick = { vm.load() }) { Text("重試") }
                 }
                 ui.clips.isEmpty() && !ui.loading -> MessagePane(Icons.Filled.FolderOff, "沒有檔案")
+                clips.isEmpty() && !ui.loading -> MessagePane(
+                    icon = Icons.Filled.CheckCircle,
+                    title = "這裡的檔案都下載過了",
+                    text = "切回「全部」可以看到所有檔案",
+                )
                 else -> ClipList(
+                    byDate = byDate,
+                    listState = listState,
                     ui = ui,
                     selectionMode = selectionMode,
                     includeRearDefault = settings.includeRear,
@@ -158,7 +198,7 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                     onToggle = vm::toggle,
                     onSelectAll = vm::selectAll,
                     onPlay = play,
-                    onDownload = { clip, rear -> vm.download(listOf(clip), rear) },
+                    onDownload = { clip, choice -> vm.download(listOf(clip), choice) },
                     onDelete = { clip -> pendingDelete = listOf(clip) },
                 )
             }
@@ -178,22 +218,46 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
 
     viewingPhoto?.let { photo ->
         // 同資料夾、同鏡頭的照片，順序同畫面
-        val photos = ui.clips
+        val photos = clips
             .mapNotNull { clip -> if (photo.camera == Camera.Rear) clip.rear else clip.front }
             .filter { it.isImage && !it.guessed }
         PhotoDialog(
-            photos = photos.map { PlayItem(vm.thumbnailUrl(it), it.name) },
+            container = container,
+            photos = photos.map { PlayItem(vm.thumbnailUrl(it), it.name, it.sdPath) },
             startIndex = photos.indexOfFirst { it.sdPath == photo.sdPath },
             onDismiss = { viewingPhoto = null },
         )
     }
 }
 
-/** 下載選項的順序：設定的預設值排第一。 */
-private fun downloadOptions(includeRearDefault: Boolean) =
-    if (includeRearDefault) listOf(true, false) else listOf(false, true)
+/** 「檔案」頁右上的選單：快速選取、備份緊急錄影。 */
+@Composable
+private fun BrowserMenu(onSelectMissing: () -> Unit, onSelectBackedUp: () -> Unit, onBackupEvents: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text("選取未下載的") }, onClick = { open = false; onSelectMissing() })
+            DropdownMenuItem(
+                text = { Text("選取已下載的（可從記錄器刪除）") },
+                onClick = { open = false; onSelectBackedUp() },
+            )
+            DropdownMenuItem(
+                text = { Text("備份所有未下載的緊急錄影") },
+                leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                onClick = { open = false; onBackupEvents() },
+            )
+        }
+    }
+}
 
-private fun downloadLabel(includeRear: Boolean) = if (includeRear) "下載前+後鏡頭" else "只下載前鏡頭"
+/** 下載選項的順序：「預設下載後鏡頭」設定決定排第一的是哪個。 */
+private fun downloadOptions(includeRearDefault: Boolean) =
+    if (includeRearDefault) {
+        listOf(DownloadChoice.Both, DownloadChoice.FrontOnly, DownloadChoice.RearOnly)
+    } else {
+        listOf(DownloadChoice.FrontOnly, DownloadChoice.Both, DownloadChoice.RearOnly)
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -201,7 +265,8 @@ private fun SelectionBar(
     count: Int,
     includeRearDefault: Boolean,
     onClose: () -> Unit,
-    onDownload: (includeRear: Boolean) -> Unit,
+    onSelectRange: () -> Unit,
+    onDownload: (DownloadChoice) -> Unit,
     onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -211,11 +276,13 @@ private fun SelectionBar(
             IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "取消選取") }
         },
         actions = {
+            // 選了頭尾兩段後，把中間的全部選起來
+            if (count >= 2) TextButton(onClick = onSelectRange) { Text("選取範圍") }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.Download, contentDescription = "下載") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    downloadOptions(includeRearDefault).forEach { rear ->
-                        DropdownMenuItem(text = { Text(downloadLabel(rear)) }, onClick = { menu = false; onDownload(rear) })
+                    downloadOptions(includeRearDefault).forEach { choice ->
+                        DropdownMenuItem(text = { Text(choice.label) }, onClick = { menu = false; onDownload(choice) })
                     }
                 }
             }
@@ -227,6 +294,8 @@ private fun SelectionBar(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ClipList(
+    byDate: Map<LocalDate?, List<Clip>>,
+    listState: LazyListState,
     ui: BrowserUi,
     selectionMode: Boolean,
     includeRearDefault: Boolean,
@@ -234,11 +303,10 @@ private fun ClipList(
     onToggle: (String) -> Unit,
     onSelectAll: (Collection<String>) -> Unit,
     onPlay: (DashcamFile) -> Unit,
-    onDownload: (Clip, Boolean) -> Unit,
+    onDownload: (Clip, DownloadChoice) -> Unit,
     onDelete: (Clip) -> Unit,
 ) {
-    val byDate = remember(ui.clips) { ui.clips.groupBy { it.date } }
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState) {
         byDate.forEach { (date, clips) ->
             stickyHeader(key = "h-$date") {
                 DateHeader(
@@ -257,7 +325,7 @@ private fun ClipList(
                     onClick = { if (selectionMode) onToggle(clip.key) else onPlay(clip.primary) },
                     onLongClick = { onToggle(clip.key) },
                     onPlay = onPlay,
-                    onDownload = { rear -> onDownload(clip, rear) },
+                    onDownload = { choice -> onDownload(clip, choice) },
                     onDelete = { onDelete(clip) },
                 )
                 HorizontalDivider()
@@ -293,7 +361,7 @@ private fun ClipRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onPlay: (DashcamFile) -> Unit,
-    onDownload: (includeRear: Boolean) -> Unit,
+    onDownload: (DownloadChoice) -> Unit,
     onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -336,14 +404,14 @@ private fun ClipRow(
                             DropdownMenuItem(text = { Text("播放後鏡頭") }, onClick = { menu = false; onPlay(r) })
                         }
                         if (clip.front != null && clip.rear != null) {
-                            downloadOptions(includeRearDefault).forEach { rear ->
+                            downloadOptions(includeRearDefault).forEach { choice ->
                                 DropdownMenuItem(
-                                    text = { Text(downloadLabel(rear)) },
-                                    onClick = { menu = false; onDownload(rear) },
+                                    text = { Text(choice.label) },
+                                    onClick = { menu = false; onDownload(choice) },
                                 )
                             }
                         } else {
-                            DropdownMenuItem(text = { Text("下載") }, onClick = { menu = false; onDownload(true) })
+                            DropdownMenuItem(text = { Text("下載") }, onClick = { menu = false; onDownload(DownloadChoice.Both) })
                         }
                         DropdownMenuItem(
                             text = { Text("從記錄器刪除…", color = MaterialTheme.colorScheme.error) },

@@ -9,6 +9,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -51,6 +54,10 @@ class DownloadRepository(
     private val sink: MediaStoreSink,
     httpClient: OkHttpClient,
     private val scope: CoroutineScope,
+    /** 佇列存檔：App 重開後還在；null = 不保存（測試用）。 */
+    queueStore: QueueStore?,
+    /** 下載到 App 資料夾底下的哪個子資料夾（依「下載資料夾分類」設定）。 */
+    private val subdirOf: (DashcamFile) -> String? = { null },
     private val isConnected: () -> Boolean,
 ) {
     private val downloader = RangeDownloader(
@@ -77,6 +84,19 @@ class DownloadRepository(
 
     /** 佇列目前是否因 [hold] 暫停（通知用：暫停不算下載結束）。 */
     val isHeld: Boolean get() = holds.value > 0
+
+    init {
+        if (queueStore != null) {
+            // 上次沒下載完的檔案放回佇列，連上記錄器（resume）後從中斷處接著下載
+            _tasks.value = queueStore.load().map { DownloadTask(it, message = WAITING_MESSAGE) }
+            // 進行中的檔案有增減時存檔（下載進度的更新不會觸發）
+            scope.launch(Dispatchers.IO) {
+                _tasks.map { list -> list.filter { it.isActive }.map { it.file } }
+                    .distinctUntilChanged()
+                    .collectLatest { queueStore.save(it) }
+            }
+        }
+    }
 
     /** @return 實際加入佇列的檔案數 */
     fun enqueue(files: List<DashcamFile>): Int {
@@ -240,7 +260,7 @@ class DownloadRepository(
                     existing.uri to existing.size
                 } else {
                     if (existing != null) sink.delete(existing.uri) // 本機舊檔大小不符，重新下載
-                    sink.create(f.name, f.isImage) to 0L
+                    sink.create(f.name, f.isImage, subdirOf(f)) to 0L
                 }
             }
 

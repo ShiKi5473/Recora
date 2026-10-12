@@ -46,6 +46,7 @@ import tw.com.mufudashcam.ui.editor.EditorScreen
 import tw.com.mufudashcam.ui.library.LibraryScreen
 import tw.com.mufudashcam.ui.live.LiveScreen
 import tw.com.mufudashcam.ui.player.PlayerScreen
+import tw.com.mufudashcam.ui.settings.SettingsScreen
 
 private data class TabItem(val route: String, val label: String, val icon: ImageVector)
 
@@ -119,7 +120,8 @@ fun AppRoot(container: AppContainer) {
             composable("live") { LiveScreen(container) }
             composable("downloads") { DownloadsScreen(container, onPlay, onEdit) }
             composable("library") { LibraryScreen(container, onPlay, onEdit) }
-            composable("device") { DeviceScreen(container) }
+            composable("device") { DeviceScreen(container, onOpenSettings = { nav.navigate("settings") }) }
+            composable("settings") { SettingsScreen(container, onBack = { nav.popBackStack() }) }
             composable(
                 PLAYER_ROUTE,
                 arguments = listOf(

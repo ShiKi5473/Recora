@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
-import tw.com.mufudashcam.data.AppSettings
 import kotlinx.coroutines.flow.lastOrNull
 import tw.com.mufudashcam.data.DiagLog
 import tw.com.mufudashcam.data.Folder
@@ -193,10 +192,6 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         val result = c.api.syncTime(now)
         val shown = now.format(DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"))
         if (result.ok) "已把記錄器時間設為 $shown" else "記錄器回應：${result.body.take(120)}"
-    }
-
-    fun updateSettings(transform: (AppSettings) -> AppSettings) {
-        viewModelScope.launch { c.settings.update(transform) }
     }
 
     fun applyHostOverride(host: String) {

@@ -7,6 +7,7 @@ import java.util.Locale
 object Formats {
     private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd（E）", Locale.TAIWAN)
+    private val DATE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
 
     fun size(bytes: Long): String = when {
         bytes < 0 -> "?"
@@ -24,6 +25,8 @@ object Formats {
     fun time(t: java.time.LocalDateTime?): String = t?.format(TIME) ?: "--:--:--"
 
     fun date(d: LocalDate?): String = d?.format(DATE) ?: "日期不明"
+
+    fun dateTime(t: java.time.LocalDateTime): String = t.format(DATE_TIME)
 
     /** 影片長度 / 片段位置：1:05 或 0:10.5 */
     fun duration(ms: Long, tenths: Boolean = false): String {

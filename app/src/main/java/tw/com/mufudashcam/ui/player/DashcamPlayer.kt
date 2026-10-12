@@ -1,13 +1,18 @@
 package tw.com.mufudashcam.ui.player
 
 import android.content.Context
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.upstream.Loader
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -15,11 +20,14 @@ import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.exoplayer.util.EventLogger
 import tw.com.mufudashcam.BuildConfig
 import tw.com.mufudashcam.data.DiagLog
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
- * 播放記錄器錄下的 TS 檔用的播放器設定（手機上的檔案與直接串流都用這個）。
+ * 讀記錄器 TS 檔用的 MediaSource 設定，播放器與剪輯匯出（[tw.com.mufudashcam.ui.editor.ClipExporter]）共用。
  *
  * **為什麼需要特別設定**：記錄器的 TS 每秒只寫一個 PCR（實測 1440P30 約 11.8 Mbps，
  * 等於每 ~1.5 MB 才有一個），而 ExoPlayer 的 TsExtractor 預設只在檔頭與檔尾各掃
@@ -29,18 +37,17 @@ import java.util.concurrent.TimeUnit
  * 會和 SampleQueue 裡已經收下的重疊，在 SampleQueue.commitSample 擲出 IllegalArgumentException，
  * 被 Loader 包成 IOException 後由 ExoPlayerImplInternal 統一回報成 ERROR_CODE_IO_UNSPECIFIED(2000)。
  * 也就是說那個 IO 錯誤其實跟連線無關，是「這個檔案不能 seek」造成的。
+ * 匯出也一樣：不可 seek 的來源，起點不在 0 秒的剪輯會被 ClippingMediaSource 拒絕（not seekable to start）。
  *
  * 所以把搜尋範圍放大到足以涵蓋一個 PCR 間隔，TsExtractor 才算得出長度並建立
  * TsBinarySearchSeeker（用 PCR 二分搜尋真正的 seek），進度條就正常、也不會再踩到上面那個例外。
  * 串流時用較小的範圍：每次 seek 的二分搜尋都要從記錄器重新讀資料，範圍越大越慢。
  *
- * 另外記錄器的 GoAhead 伺服器很弱（單核心、一次只服務一個連線），所以串流時逾時放寬、
- * 載入失敗多重試幾次（指數退避），並把預讀量壓小。
- *
+ * 記錄器的 GoAhead 伺服器很弱（單核心、一次只服務一個連線），所以逾時放寬、載入失敗多重試幾次（指數退避）。
  * HTTP 走 App 共用的 [client]（含 RouteGuard），斷線後不會把請求送到行動網路上。
  */
 @UnstableApi
-fun dashcamPlayer(context: Context, client: OkHttpClient, streaming: Boolean): ExoPlayer {
+fun dashcamMediaSourceFactory(context: Context, client: OkHttpClient, streaming: Boolean): MediaSource.Factory {
     val http = OkHttpDataSource.Factory(
         client.newBuilder()
             .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -49,9 +56,18 @@ fun dashcamPlayer(context: Context, client: OkHttpClient, streaming: Boolean): E
     )
     val extractors = DefaultExtractorsFactory()
         .setTsExtractorTimestampSearchBytes(if (streaming) TS_SEARCH_BYTES_STREAM else TS_SEARCH_BYTES_LOCAL)
-    val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http), extractors)
+    return DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http), extractors)
         // 被踢掉就重新連線續讀（間隔 0、1、2…秒），而不是馬上把錯誤丟給使用者
         .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(MAX_LOAD_RETRIES))
+}
+
+/**
+ * 播放記錄器錄下的 TS 檔用的播放器（手機上的檔案與直接串流都用這個），TS 的設定見 [dashcamMediaSourceFactory]。
+ * 記錄器一次只服務一個連線，預讀量壓小。
+ */
+@UnstableApi
+fun dashcamPlayer(context: Context, client: OkHttpClient, streaming: Boolean): ExoPlayer {
+    val sources = dashcamMediaSourceFactory(context, client, streaming)
     val loadControl = DefaultLoadControl.Builder()
         .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, BUFFER_FOR_PLAYBACK_MS, BUFFER_AFTER_REBUFFER_MS)
         .setTargetBufferBytes(TARGET_BUFFER_BYTES)
@@ -69,6 +85,40 @@ fun dashcamPlayer(context: Context, client: OkHttpClient, streaming: Boolean): E
             // debug build 把每次載入失敗、重試都印到 logcat（tag EventLogger），接電腦時查原因用
             if (BuildConfig.DEBUG) addAnalyticsListener(EventLogger())
         }
+}
+
+/**
+ * 讀出手機上影片的長度（跨段剪輯用），與預覽、匯出同一套 TS 設定，三者算出的長度才會一致。
+ * 停用影音軌、不解碼，只等 TsExtractor 算出長度；最多等 [timeoutMs]，讀不出來回 null。必須在主執行緒呼叫。
+ */
+@UnstableApi
+suspend fun probeDurationMs(context: Context, client: OkHttpClient, uri: String, timeoutMs: Long = 10_000): Long? {
+    val player = dashcamPlayer(context, client, streaming = false)
+    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+        .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+        .build()
+    return try {
+        withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<Long?> { cont ->
+                player.addListener(object : Player.Listener {
+                    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                        if (timeline.isEmpty || !cont.isActive) return
+                        val window = timeline.getWindow(0, Timeline.Window())
+                        if (!window.isPlaceholder && window.durationUs != C.TIME_UNSET) cont.resume(window.durationMs)
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        if (cont.isActive) cont.resume(null)
+                    }
+                })
+                player.setMediaItem(MediaItem.fromUri(uri))
+                player.prepare()
+            }
+        }
+    } finally {
+        player.release()
+    }
 }
 
 /**

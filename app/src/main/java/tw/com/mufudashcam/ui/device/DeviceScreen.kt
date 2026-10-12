@@ -1,22 +1,15 @@
 package tw.com.mufudashcam.ui.device
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -24,13 +17,14 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -43,26 +37,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.BuildConfig
-import tw.com.mufudashcam.data.DashcamConfig
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.SettingDef
 import tw.com.mufudashcam.ui.Formats
 import tw.com.mufudashcam.data.SettingDefs
 import tw.com.mufudashcam.data.net.ConnState
+import tw.com.mufudashcam.ui.common.ChoiceRow
 import tw.com.mufudashcam.ui.common.ConnectionChip
+import tw.com.mufudashcam.ui.common.Section
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DeviceScreen(container: AppContainer) {
+fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
     val vm: DeviceViewModel = viewModel(factory = DeviceViewModel.factory(container))
     val ui by vm.ui.collectAsStateWithLifecycle()
     val conn by container.connection.state.collectAsStateWithLifecycle()
@@ -204,17 +199,12 @@ fun DeviceScreen(container: AppContainer) {
                 }
             }
 
-            Section("App 設定") {
-                SwitchRow(
-                    title = "預設下載後鏡頭",
-                    subtitle = "下載選單中「前+後鏡頭」排在第一個",
-                    checked = settings.includeRear,
-                    onChange = { v -> vm.updateSettings { it.copy(includeRear = v) } },
-                )
-                WifiFields(
-                    ssidPrefix = settings.ssidPrefix,
-                    password = settings.wifiPassword,
-                    onSave = { prefix, pwd -> vm.updateSettings { it.copy(ssidPrefix = prefix, wifiPassword = pwd) } },
+            ElevatedCard(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
+                ListItem(
+                    headlineContent = { Text("App 設定", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = { Text("下載、剪輯匯出、外觀、記錄器 Wi-Fi 密碼") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 )
             }
 
@@ -267,42 +257,19 @@ private fun StorageSummary(ui: DeviceUi, onRefresh: () -> Unit) {
     }
 }
 
-/** 一項記錄器設定：點一下展開選項。 */
+/** 一項記錄器設定：點一下展開選項；目前的值不在選項裡時顯示原始值。 */
 @Composable
-private fun SettingRow(def: SettingDef, current: String?, enabled: Boolean, onSelect: (String) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            Modifier.fillMaxWidth().clickable(enabled = enabled) { open = true }.padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(def.title)
-                def.hint?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            Text(def.labelOf(current), color = MaterialTheme.colorScheme.primary)
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            def.options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label) },
-                    leadingIcon = if (option.value.equals(current, ignoreCase = true)) {
-                        { Icon(Icons.Filled.Check, contentDescription = null) }
-                    } else {
-                        null
-                    },
-                    onClick = {
-                        open = false
-                        if (!option.value.equals(current, ignoreCase = true)) onSelect(option.value)
-                    },
-                )
-            }
-        }
-    }
-}
+private fun SettingRow(def: SettingDef, current: String?, enabled: Boolean, onSelect: (String) -> Unit) =
+    ChoiceRow(
+        title = def.title,
+        options = def.options,
+        selected = def.options.firstOrNull { it.value.equals(current, ignoreCase = true) },
+        optionLabel = { it.label },
+        onSelect = { onSelect(it.value) },
+        hint = def.hint,
+        enabled = enabled,
+        selectedLabel = def.labelOf(current),
+    )
 
 @Composable
 private fun FormatDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
@@ -341,66 +308,5 @@ private fun ConnectionLog(container: AppContainer) {
             fontFamily = FontFamily.Monospace,
         )
         TextButton(onClick = { clipboard.setText(AnnotatedString(lines.joinToString("\n"))) }) { Text("複製紀錄") }
-    }
-}
-
-@Composable
-private fun WifiFields(ssidPrefix: String, password: String, onSave: (String, String) -> Unit) {
-    var prefix by rememberSaveable(ssidPrefix) { mutableStateOf(ssidPrefix) }
-    var pwd by rememberSaveable(password) { mutableStateOf(password) }
-    Text("記錄器 Wi-Fi", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-    Text(
-        "這裡只是 App 按「連線」時用的 SSID 開頭與密碼，不會改到記錄器本身。" +
-            "記錄器的密碼請用官方 App 修改，改完再回來這裡更新。",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (password == DashcamConfig.DEFAULT_PASSWORD) {
-        Text(
-            "記錄器若還在用出廠密碼 ${DashcamConfig.DEFAULT_PASSWORD}，附近任何人都能連上，" +
-                "不需驗證就能刪除影片或格式化記憶卡。建議盡快改掉。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-    }
-    OutlinedTextField(
-        value = prefix,
-        onValueChange = { prefix = it },
-        label = { Text("SSID 開頭") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = pwd,
-        onValueChange = { pwd = it },
-        label = { Text("密碼") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Button(
-        onClick = { onSave(prefix.trim(), pwd) },
-        enabled = prefix.isNotBlank() && pwd.length >= 8 && (prefix != ssidPrefix || pwd != password),
-    ) { Text("儲存") }
-}
-
-@Composable
-private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = checked, onCheckedChange = onChange)
-    }
-}
-
-@Composable
-private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            content()
-        }
     }
 }

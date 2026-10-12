@@ -15,6 +15,10 @@ enum class PathStyle { Mnt, Root }
 object FileNames {
     private val NAME_RE = Regex("""^([A-Za-z]+)(\d{6})-(\d{6})([FR])?\.(\w+)$""", RegexOption.IGNORE_CASE)
     private val FRONT_RE = Regex("""/F/([^/]+)F\.(\w+)$""")
+    private val REAR_RE = Regex("""/R/([^/]+)R\.(\w+)$""")
+
+    /** 記錄器檔名開頭（前綴＋時間＋鏡頭），後面可以接剪輯片段或截圖位置：FILE260923-131459F_0m10s0-0m15s0.mp4 */
+    private val CAMERA_RE = Regex("""^([A-Za-z]+\d{6}-\d{6})([FR])(.*)$""", RegexOption.IGNORE_CASE)
     private val IMAGE_EXT = setOf("JPG", "JPEG", "PNG")
 
     /** FILE260923-131459F.TS → prefix=FILE, date=260923, time=131459, camera=Front, ext=TS */
@@ -66,6 +70,32 @@ object FileNames {
     fun rearPathOf(frontPath: String): String? {
         val m = FRONT_RE.find(frontPath) ?: return null
         return frontPath.replaceRange(m.range, "/R/${m.groupValues[1]}R.${m.groupValues[2]}")
+    }
+
+    /** 另一鏡頭的 SD 卡路徑：/F/xxxF.TS ↔ /R/xxxR.TS，看不出鏡頭則回 null。 */
+    fun counterpartPath(sdPath: String): String? =
+        rearPathOf(sdPath) ?: REAR_RE.find(sdPath)?.let { m ->
+            sdPath.replaceRange(m.range, "/F/${m.groupValues[1]}F.${m.groupValues[2]}")
+        }
+
+    /** 檔名看得出的鏡頭；剪輯檔、截圖檔看來源的部分。 */
+    fun cameraOfName(name: String): Camera? = when (CAMERA_RE.matchEntire(name)?.groupValues?.get(2)?.uppercase()) {
+        "F" -> Camera.Front
+        "R" -> Camera.Rear
+        else -> null
+    }
+
+    /** 另一鏡頭的檔名：FILE260923-131459F.TS ↔ FILE260923-131459R.TS（剪輯檔、截圖檔名也適用），看不出鏡頭則回 null。 */
+    fun counterpartName(name: String): String? {
+        val m = CAMERA_RE.matchEntire(name) ?: return null
+        val cam = m.groupValues[2]
+        val other = when (cam) {
+            "F" -> "R"
+            "R" -> "F"
+            "f" -> "r"
+            else -> "f"
+        }
+        return m.groupValues[1] + other + m.groupValues[3]
     }
 
     fun httpPath(sdPath: String, style: PathStyle): String = when (style) {

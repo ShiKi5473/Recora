@@ -1,8 +1,10 @@
 package tw.com.mufudashcam.data
 
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import kotlin.math.abs
 
 /** 相簿分頁的三種類別。 */
 enum class MediaKind(val label: String) {
@@ -39,12 +41,14 @@ data class LocalMedia(
  * 只收 App 自己的資料夾（Movies/MufuDashcam、Pictures/MufuDashcam），分成未剪輯／已剪輯／照片，
  * 並決定每個檔案的時間。檔名規則對應 [tw.com.mufudashcam.ui.editor.EditorScreen] 的輸出：
  * 已剪輯 `<原檔名>_0m10s0-0m15s0[_靜音].mp4`、截圖 `<原檔名>_0m15s0.jpg`。
+ * 同名檔案已存在時 MediaStore 會自動改名成 `… (1).mp4`，這種也認得。
  */
 object LocalLibrary {
     private val MOVIES = "Movies/${DashcamConfig.LOCAL_DIR}/"
     private val PICTURES = "Pictures/${DashcamConfig.LOCAL_DIR}/"
-    private val EDITED_RE = Regex("""^(.+)_(\d+)m(\d{2})s(\d)-(\d+)m(\d{2})s(\d)(_靜音)?\.mp4$""", RegexOption.IGNORE_CASE)
-    private val SHOT_RE = Regex("""^(.+)_(\d+)m(\d{2})s(\d)\.jpe?g$""", RegexOption.IGNORE_CASE)
+    private val EDITED_RE =
+        Regex("""^(.+)_(\d+)m(\d{2})s(\d)-(\d+)m(\d{2})s(\d)(_靜音)?(?: \(\d+\))?\.mp4$""", RegexOption.IGNORE_CASE)
+    private val SHOT_RE = Regex("""^(.+)_(\d+)m(\d{2})s(\d)(?: \(\d+\))?\.jpe?g$""", RegexOption.IGNORE_CASE)
 
     /** MediaStore 的一列 → [LocalMedia]；不是 App 資料夾的檔案回 null。 */
     fun build(
@@ -86,6 +90,14 @@ object LocalLibrary {
                 )
             else -> null
         }
+    }
+
+    /** 影片開頭的實際錄影時間：原始檔看檔名；剪輯檔 = 來源開始時間 + 片段起點。看不出來回 null。 */
+    fun recordingStart(name: String): LocalDateTime? {
+        FileNames.parse(name)?.dateTime?.let { return it }
+        val m = EDITED_RE.matchEntire(name) ?: return null
+        val start = FileNames.parse(m.groupValues[1] + ".TS")?.dateTime ?: return null
+        return start.plusNanos(ms(m, 2) * 1_000_000)
     }
 
     /** 記錄器照片看檔名；截圖 = 原影片開始時間 + 截圖位置。 */
@@ -132,6 +144,33 @@ object LocalLibrary {
         val t = ms.coerceAtLeast(0)
         return "${t / 60000}m${(t / 1000 % 60).toString().padStart(2, '0')}s${t / 100 % 10}"
     }
+
+    /**
+     * 跨段剪輯：同鏡頭、錄影時間最接近的下一段（[forward]）或前一段原始檔。
+     * 不限檔名前綴（緊急錄影後面接的是一般錄影）；是否首尾相接由呼叫端用實際長度確認。
+     */
+    fun adjacent(items: List<LocalMedia>, name: String, forward: Boolean): LocalMedia? {
+        val start = FileNames.parse(name)?.dateTime ?: return null
+        val camera = FileNames.cameraOfName(name)
+        return items
+            .mapNotNull { m ->
+                val t = FileNames.parse(m.name)?.dateTime
+                if (m.kind != MediaKind.Original || t == null || FileNames.cameraOfName(m.name) != camera) return@mapNotNull null
+                if (if (forward) t > start else t < start) m to t else null
+            }
+            .minByOrNull { (_, t) -> abs(Duration.between(start, t).toMillis()) }
+            ?.first
+    }
+
+    /** 整理空間：已經剪輯過的原始檔（檔名去掉副檔名 = 某支剪輯檔的來源）。 */
+    fun editedOriginals(items: List<LocalMedia>): List<LocalMedia> {
+        val sources = items.filter { it.kind == MediaKind.Edited }.mapNotNullTo(HashSet()) { it.source?.uppercase() }
+        return items.filter { it.kind == MediaKind.Original && it.name.substringBeforeLast('.').uppercase() in sources }
+    }
+
+    /** 整理空間：[cutoff] 之前錄的原始檔。 */
+    fun originalsRecordedBefore(items: List<LocalMedia>, cutoff: LocalDateTime): List<LocalMedia> =
+        items.filter { it.kind == MediaKind.Original && it.time < cutoff }
 
     /** 最新的在最上面。 */
     fun sorted(items: List<LocalMedia>): List<LocalMedia> =

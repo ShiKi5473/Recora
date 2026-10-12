@@ -16,16 +16,19 @@ import java.io.IOException
 import java.io.OutputStream
 
 /**
- * 把下載寫進相簿（MediaStore），影片放 Movies/MufuDashcam、照片放 Pictures/MufuDashcam。
+ * 把下載寫進相簿（MediaStore），影片放 Movies/MufuDashcam、照片放 Pictures/MufuDashcam（可再分子資料夾）。
  * 下載中的檔案標為 IS_PENDING，未完成的 pending 檔案就是續傳的依據，不需要另外的資料庫。
+ * 找檔案時包含子資料夾，換過「下載資料夾分類」設定也找得到以前下載的。
  */
 class MediaStoreSink(context: Context) {
     private val resolver = context.contentResolver
 
     data class Entry(val uri: Uri, val name: String, val size: Long, val pending: Boolean)
 
-    fun relativePath(isImage: Boolean): String =
-        (if (isImage) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/${DashcamConfig.LOCAL_DIR}/"
+    /** [subdir] = App 資料夾底下的子資料夾（null = 直接放在裡面）。 */
+    fun relativePath(isImage: Boolean, subdir: String? = null): String =
+        (if (isImage) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/${DashcamConfig.LOCAL_DIR}/" +
+            subdir?.let { "$it/" }.orEmpty()
 
     private fun collection(isImage: Boolean): Uri =
         if (isImage) {
@@ -36,20 +39,20 @@ class MediaStoreSink(context: Context) {
 
     /** 找同名檔案（含下載中的 pending 檔案）；pending 的大小以實際檔案長度為準。 */
     fun find(name: String, isImage: Boolean): Entry? =
-        query(isImage, "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?", arrayOf(name), includePending = true)
+        query(isImage, "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?", arrayOf(name), MediaStore.MATCH_INCLUDE)
             .firstOrNull()
             ?.let { if (it.pending) it.copy(size = currentSize(it.uri)) else it }
 
     /** 已完成下載的檔案：大寫檔名 → 大小。 */
     fun downloaded(): Map<String, Long> =
-        (query(false, null, null, includePending = false) + query(true, null, null, includePending = false))
+        (query(false, null, null, MediaStore.MATCH_EXCLUDE) + query(true, null, null, MediaStore.MATCH_EXCLUDE))
             .associate { it.name.uppercase() to it.size }
 
-    fun create(name: String, isImage: Boolean): Uri {
+    fun create(name: String, isImage: Boolean, subdir: String? = null): Uri {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, FileNames.mimeType(name))
-            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath(isImage))
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath(isImage, subdir))
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         return resolver.insert(collection(isImage), values) ?: throw IOException("無法在相簿建立檔案")
@@ -93,6 +96,11 @@ class MediaStoreSink(context: Context) {
         finish(uri)
         return uri
     }
+
+    /** 沒下載完的檔案（App 資料夾裡的 pending 檔），大小以實際檔案長度為準。 */
+    fun listPending(): List<Entry> =
+        (query(false, null, null, MediaStore.MATCH_ONLY) + query(true, null, null, MediaStore.MATCH_ONLY))
+            .map { it.copy(size = runCatching { currentSize(it.uri) }.getOrDefault(it.size)) }
 
     /**
      * 相簿分頁：只列 Movies/MufuDashcam 與 Pictures/MufuDashcam（含子資料夾），排除下載中的 pending 檔案。
@@ -143,24 +151,22 @@ class MediaStoreSink(context: Context) {
         return resolver.insert(collection(isImage), values) ?: throw IOException("無法在相簿建立檔案")
     }
 
+    /** App 資料夾（含子資料夾）裡的檔案；[matchPending] = MediaStore.MATCH_INCLUDE／EXCLUDE／ONLY。 */
     private fun query(
         isImage: Boolean,
         extraSelection: String?,
         extraArgs: Array<String>?,
-        includePending: Boolean,
+        matchPending: Int,
     ): List<Entry> {
         val selection = buildString {
-            append("${MediaStore.MediaColumns.RELATIVE_PATH}=?")
+            append("${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?")
             if (extraSelection != null) append(" AND $extraSelection")
         }
-        val args = arrayOf(relativePath(isImage)) + (extraArgs ?: emptyArray())
+        val args = arrayOf(relativePath(isImage) + "%") + (extraArgs ?: emptyArray())
         val queryArgs = Bundle().apply {
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
             putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, args)
-            putInt(
-                MediaStore.QUERY_ARG_MATCH_PENDING,
-                if (includePending) MediaStore.MATCH_INCLUDE else MediaStore.MATCH_EXCLUDE,
-            )
+            putInt(MediaStore.QUERY_ARG_MATCH_PENDING, matchPending)
         }
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
