@@ -33,7 +33,12 @@ data class LibraryUi(
     val loading: Boolean = false,
     /** 鏡頭篩選：null = 全部。 */
     val cameraFilter: Camera? = null,
+    /** 多選中的檔案（uri）；非空 = 選取模式。 */
+    val selection: Set<String> = emptySet(),
 ) {
+    /** 目前分頁、篩選後被選取的檔案。 */
+    val selectedItems: List<LocalMedia> get() = of(tab).filter { it.uri in selection }
+
     /** 某一類、套用鏡頭篩選後的清單。 */
     fun of(kind: MediaKind): List<LocalMedia> =
         items.filter { it.kind == kind && (cameraFilter == null || it.camera == cameraFilter) }
@@ -66,9 +71,17 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    fun selectTab(kind: MediaKind) = _ui.update { it.copy(tab = kind) }
+    fun selectTab(kind: MediaKind) = _ui.update { it.copy(tab = kind, selection = emptySet()) }
 
-    fun setCameraFilter(camera: Camera?) = _ui.update { it.copy(cameraFilter = camera) }
+    fun setCameraFilter(camera: Camera?) = _ui.update { it.copy(cameraFilter = camera, selection = emptySet()) }
+
+    fun toggle(uri: String) = _ui.update {
+        it.copy(selection = if (uri in it.selection) it.selection - uri else it.selection + uri)
+    }
+
+    fun selectAll(uris: Collection<String>) = _ui.update { it.copy(selection = it.selection + uris) }
+
+    fun clearSelection() = _ui.update { it.copy(selection = emptySet()) }
 
     fun refresh() {
         viewModelScope.launch {
@@ -76,20 +89,39 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
             val items = withContext(Dispatchers.IO) {
                 runCatching { LocalLibrary.sorted(c.sink.listLibrary()) }.getOrDefault(emptyList())
             }
-            _ui.update { it.copy(items = items, loading = false) }
+            // 已經不在相簿裡的檔案（例如被刪掉）從選取中移除
+            val present = items.mapTo(HashSet()) { it.uri }
+            _ui.update { u -> u.copy(items = items, loading = false, selection = u.selection.filterTo(HashSet()) { it in present }) }
         }
     }
 
-    fun delete(item: LocalMedia) {
+    /**
+     * 刪除一或多個檔案。本 App 建立的直接刪；不是本 App 建立的（例如重新安裝前下載的）
+     * 集中成一次系統確認視窗，不必一個一個按。
+     */
+    fun delete(items: List<LocalMedia>) {
+        if (items.isEmpty()) return
         viewModelScope.launch {
-            val uri = Uri.parse(item.uri)
-            try {
-                withContext(Dispatchers.IO) { c.sink.delete(uri) }
-                _messages.trySend("已刪除 ${item.name}")
+            val needConfirm = ArrayList<Uri>()
+            var deleted = 0
+            withContext(Dispatchers.IO) {
+                for (item in items) {
+                    val uri = Uri.parse(item.uri)
+                    try {
+                        c.sink.delete(uri)
+                        deleted++
+                    } catch (e: SecurityException) {
+                        needConfirm += uri
+                    }
+                }
+            }
+            clearSelection()
+            if (deleted > 0) {
+                _messages.trySend(if (items.size == 1) "已刪除 ${items[0].name}" else "已刪除 $deleted 個檔案")
                 refresh()
-            } catch (e: SecurityException) {
-                // 不是本 App 建立的檔案（例如重新安裝前下載的）：請系統確認
-                val request = MediaStore.createDeleteRequest(c.app.contentResolver, listOf(uri))
+            }
+            if (needConfirm.isNotEmpty()) {
+                val request = MediaStore.createDeleteRequest(c.app.contentResolver, needConfirm)
                 _deleteRequests.trySend(request.intentSender)
             }
         }
