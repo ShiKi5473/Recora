@@ -49,6 +49,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.BuildConfig
+import tw.com.mufudashcam.data.Brand
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.SettingDef
 import tw.com.mufudashcam.ui.Formats
@@ -68,6 +69,7 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(it) } }
     val connected = conn is ConnState.Connected
+    val connectedBrand = (conn as? ConnState.Connected)?.brand
     var askFormat by remember { mutableStateOf(false) }
     if (askFormat) {
         FormatDialog(onDismiss = { askFormat = false }, onConfirm = { askFormat = false; vm.formatCard() })
@@ -86,7 +88,8 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
             Section("連線") {
                 Text(
                     when (val s = conn) {
-                        is ConnState.Connected -> if (s.viaOverride) "已連線（測試模式）" else "已連線"
+                        is ConnState.Connected ->
+                            "已連線：${s.brand.label}" + if (s.viaOverride) "（測試模式）" else ""
                         ConnState.Requesting -> "等待系統連線視窗…"
                         is ConnState.Failed -> s.message
                         ConnState.Idle -> "未連線"
@@ -106,8 +109,13 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                 Section("錄影") {
                     Text("目前狀態：${ui.recordStatus ?: "讀取中…"}")
                     Text(
-                        "實測此記錄器在手機連線時會停在 Standby（也無法遠端開始錄影），" +
-                            "中斷連線後由記錄器自行恢復錄影。用完請按「中斷連線」。",
+                        if (connectedBrand == Brand.Astro) {
+                            "Astro 連線時會繼續錄影；只有用檔案（瀏覽、下載、串流、刪除）或改設定時才暫停，" +
+                                "離開約 10 秒後自動恢復。按「中斷連線」會立刻恢復。"
+                        } else {
+                            "實測此記錄器在手機連線時會停在 Standby（也無法遠端開始錄影），" +
+                                "中斷連線後由記錄器自行恢復錄影。用完請按「中斷連線」。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -142,35 +150,36 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                     when {
                         ui.loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                         ui.error != null -> Text(ui.error!!, color = MaterialTheme.colorScheme.error)
-                        ui.properties.isEmpty() -> Text("記錄器沒有回傳設定值")
+                        !ui.settingsLoaded || (ui.defs.isEmpty() && ui.readOnly.isEmpty()) -> Text("記錄器沒有回傳設定值")
                         else -> {
                             // 可調整的項目（記錄器有回報的才顯示）
-                            val editable = SettingDefs.all.filter { "Camera.Menu.${it.key}" in ui.properties }
-                            editable.filter { !it.advanced }.forEach { def ->
+                            ui.defs.filter { !it.advanced }.forEach { def ->
                                 SettingRow(
                                     def = def,
-                                    current = ui.properties["Camera.Menu.${def.key}"],
+                                    current = ui.values[def.key],
                                     enabled = !ui.working,
                                     onSelect = { vm.changeSetting(def, it) },
                                 )
                             }
-                            var showAdvanced by remember { mutableStateOf(false) }
-                            TextButton(onClick = { showAdvanced = !showAdvanced }) {
-                                Text(if (showAdvanced) "收起進階設定" else "進階設定（官方 App 未提供）")
-                            }
-                            if (showAdvanced) {
-                                Text(
-                                    "這些設定記錄器可以修改，但原廠 App 沒有開放給 V60P，效果未經確認。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                                editable.filter { it.advanced }.forEach { def ->
-                                    SettingRow(
-                                        def = def,
-                                        current = ui.properties["Camera.Menu.${def.key}"],
-                                        enabled = !ui.working,
-                                        onSelect = { vm.changeSetting(def, it) },
+                            if (ui.defs.any { it.advanced }) {
+                                var showAdvanced by remember { mutableStateOf(false) }
+                                TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                                    Text(if (showAdvanced) "收起進階設定" else "進階設定（官方 App 未提供）")
+                                }
+                                if (showAdvanced) {
+                                    Text(
+                                        "這些設定記錄器可以修改，但原廠 App 沒有開放給這台機型，效果未經確認。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
                                     )
+                                    ui.defs.filter { it.advanced }.forEach { def ->
+                                        SettingRow(
+                                            def = def,
+                                            current = ui.values[def.key],
+                                            enabled = !ui.working,
+                                            onSelect = { vm.changeSetting(def, it) },
+                                        )
+                                    }
                                 }
                             }
                             Text(
@@ -179,20 +188,21 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             // 其他設定唯讀顯示
-                            var showAll by remember { mutableStateOf(false) }
-                            TextButton(onClick = { showAll = !showAll }) {
-                                Text(if (showAll) "收起其他設定" else "顯示其他設定（唯讀）")
-                            }
-                            if (showAll) {
-                                val editableKeys = editable.map { "Camera.Menu.${it.key}" }.toSet()
-                                ui.properties.filterKeys { it !in editableKeys }.forEach { (key, value) ->
-                                    Row(Modifier.fillMaxWidth()) {
-                                        Text(
-                                            key.removePrefix("Camera.Menu."),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                            if (ui.readOnly.isNotEmpty()) {
+                                var showAll by remember { mutableStateOf(false) }
+                                TextButton(onClick = { showAll = !showAll }) {
+                                    Text(if (showAll) "收起其他設定" else "顯示其他設定（唯讀）")
+                                }
+                                if (showAll) {
+                                    ui.readOnly.forEach { (key, value) ->
+                                        Row(Modifier.fillMaxWidth()) {
+                                            Text(
+                                                key,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                                        }
                                     }
                                 }
                             }

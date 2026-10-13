@@ -18,6 +18,8 @@ data class SettingDef(
     val hint: String? = null,
     /** 官方 App 沒有提供的設定（記錄器內部有、可改，但原廠未開放給此機型）。 */
     val advanced: Boolean = false,
+    /** 送出後記錄器不一定馬上套用（Astro 的解析度要等 Wi-Fi 斷線後才變），讀回的值沒變也不算失敗。 */
+    val deferred: Boolean = false,
 ) {
     fun labelOf(value: String?): String =
         options.firstOrNull { it.value.equals(value, ignoreCase = true) }?.label ?: (value ?: "?")

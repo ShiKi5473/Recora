@@ -47,7 +47,27 @@ API 規格見 [MUFU_V60P_API.md](MUFU_V60P_API.md)（已在實機上驗證），
   - 修改記錄器設定：改完會讀回確認；官方 App 沒有提供的項目放在「進階」。
   - 診斷紀錄（可複製）。
 - **App 設定**（「裝置」頁的「App 設定」）：下載、瀏覽、播放、剪輯匯出、外觀（主題、動態色彩）。
-  記錄器 Wi-Fi 的 SSID 開頭與密碼也在這裡：只改 App 自己存的值，不會改到記錄器本身的密碼。
+  記錄器 Wi-Fi 的 SSID 開頭與密碼也在這裡（MUFU、Astro 各一組）：只改 App 自己存的值，不會改到記錄器本身的密碼。
+
+## Astro LEO3
+
+連線卡片可以切換 **MUFU／Astro**（記住上次的選擇）；在系統設定手動連上任一台，App 也會自動偵測是哪一種。
+Astro 預設 SSID 開頭 `Astrofamily_`、密碼 `12345678`（改過密碼要到「App 設定」更新）。協定與待實測項目見 [ASTRO_LEO3_API.md](ASTRO_LEO3_API.md)。
+
+- 功能與 MUFU 相同：瀏覽、下載（續傳）、串流播放、刪除、即時畫面、裝置狀態與對時、修改設定、格式化。
+- **與 MUFU 不同**：手機連著時 Astro 會繼續錄影，只有用檔案（檔案頁、下載、串流播放、刪除）或改設定時才停錄；
+  最後一個使用結束約 10 秒後自動切回錄影模式並恢復錄影，中斷連線時一定先恢復。
+- 對時送 UTC，記錄器再套自己的時區設定（8103）。
+- 緊急錄影（ATTR 33，唯讀）官方 App 不刪，本 App 試刪的結果待實測。
+
+### 車上測試與拉診斷紀錄
+
+在車上連著記錄器時沒辦法同時接電腦，所以 App 會把診斷紀錄（每個請求與回應）寫成檔案，保留 7 天。回來接 USB：
+
+```bash
+adb pull /sdcard/Android/data/tw.com.mufudashcam/files/diag/
+adb pull /sdcard/Android/data/com.ligo.aAstroCam/files/ZyLog/    # 官方 App 的紀錄（若同時用它對照）
+```
 
 ## 建置與安裝
 
@@ -72,6 +92,7 @@ release 版也是用 debug 金鑰（`%USERPROFILE%\.android\debug.keystore`）�
 python tools/mock_dashcam.py --throttle 800                 # 127.0.0.1:8080，限速 800 KB/s
 python tools/mock_dashcam.py --drop-every 1000              # 每個回應送 1 MB 就斷線，測續傳
 python tools/mock_dashcam.py --path-style root              # 只接受 /Video/... 路徑，測備用路徑
+python tools/mock_dashcam.py --brand astro                  # 模擬 Astro LEO3：連線卡片先切到 Astro；會印出收到的指令順序（停錄／恢復時序）
 ```
 
 在模擬器上測試：

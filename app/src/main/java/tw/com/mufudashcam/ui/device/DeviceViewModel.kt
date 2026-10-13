@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,26 +16,31 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
 import kotlinx.coroutines.flow.lastOrNull
-import tw.com.mufudashcam.data.DiagLog
 import tw.com.mufudashcam.data.Folder
 import tw.com.mufudashcam.data.api.DashcamApi
 import tw.com.mufudashcam.data.SettingDef
 import tw.com.mufudashcam.data.net.ConnState
 import java.io.IOException
 import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 data class DeviceUi(
-    /** 記錄器回報的錄影狀態（Recording / Standby…），null = 未讀取或韌體不支援。 */
+    /** 記錄器回報的錄影狀態（MUFU：Recording / Standby…；Astro：錄影中…），null = 未讀取。 */
     val recordStatus: String? = null,
-    /** 記憶卡狀態（READY / FORMAT_ING…）。 */
+    /** 記憶卡狀態（MUFU：READY / FORMAT_ING…；Astro：正常）。 */
     val cardStatus: String? = null,
     val formatting: Boolean = false,
     val storage: DashcamApi.StorageInfo? = null,
     /** 各資料夾佔用：檔案數與位元組（前 + 後鏡頭）；null = 尚未計算。 */
     val usage: Map<Folder, Pair<Int, Long>>? = null,
     val usageLoading: Boolean = false,
-    val properties: Map<String, String> = emptyMap(),
+    /** 可以改的設定、目前的值（key 同 [SettingDef.key]），以及其他唯讀顯示的項目。 */
+    val defs: List<SettingDef> = emptyList(),
+    val values: Map<String, String> = emptyMap(),
+    val readOnly: Map<String, String> = emptyMap(),
+    val settingsLoaded: Boolean = false,
     val loading: Boolean = false,
     val error: String? = null,
     val working: Boolean = false,
@@ -57,18 +61,18 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    /** 讀取記錄器設定。實測 devinfo.fwver 在此韌體不存在，所以兩組都讀、有什麼就顯示什麼。 */
+    /** 讀取記錄器設定（可改的項目與選項依記錄器回報的為準）。 */
     fun loadInfo() {
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {
-                val devInfo = try {
-                    c.api.getProperties("devinfo.*")
-                } catch (e: IOException) {
-                    emptyMap()
+                val snapshot = c.api.readSettings()
+                _ui.update {
+                    it.copy(
+                        defs = snapshot.defs, values = snapshot.values, readOnly = snapshot.readOnly,
+                        settingsLoaded = true, loading = false,
+                    )
                 }
-                val menu = c.api.getProperties("Camera.Menu.*")
-                _ui.update { it.copy(properties = (devInfo + menu).toSortedMap(), loading = false) }
             } catch (e: IOException) {
                 _ui.update { it.copy(loading = false, error = "讀取失敗：${e.message}") }
             }
@@ -124,8 +128,8 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         }
 
     /**
-     * 格式化記憶卡：送出指令後輪詢 Camera.Menu.SD0，直到記錄器回報 READY。
-     * 由記錄器自己格式化，所以檔案系統與資料夾結構就是記錄器要的格式。
+     * 格式化記憶卡：由記錄器自己格式化（檔案系統與資料夾結構就是記錄器要的格式），
+     * 等待與確認完成的流程在各記錄器的實作裡，這裡只顯示進度。
      */
     fun formatCard() {
         if (c.downloads.active.value) {
@@ -135,27 +139,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(formatting = true, cardStatus = "格式化中…") }
             val message = try {
-                val result = c.api.formatCard()
-                DiagLog.log("格式化記憶卡：${DiagLog.compact(result.body)}")
-                delay(2000)
-                var last: String? = null
-                var sawBusy = false
-                val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
-                while (System.currentTimeMillis() < deadline) {
-                    last = try {
-                        c.api.cardStatus()
-                    } catch (e: IOException) {
-                        null // 格式化期間記錄器可能暫時不回應
-                    }
-                    _ui.update { it.copy(cardStatus = last ?: "等待記錄器回應…") }
-                    if (last != null && !last.equals("READY", ignoreCase = true)) sawBusy = true
-                    if (last.equals("READY", ignoreCase = true) && (sawBusy || c.api.isCardEmpty())) break
-                    delay(1000)
-                }
-                when {
-                    last.equals("READY", ignoreCase = true) -> "格式化完成，記憶卡已清空"
-                    else -> "已送出格式化，但記錄器目前狀態為 ${last ?: "無回應"}，請稍後確認"
-                }
+                c.api.formatCard { progress -> _ui.update { it.copy(cardStatus = progress) } }
             } catch (e: IOException) {
                 "格式化失敗：${e.message}"
             }
@@ -187,21 +171,22 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
     /** 修改記錄器設定，讀回確認是否真的套用。 */
     fun changeSetting(def: SettingDef, value: String) = command {
         if (def.slowMs > 0) _messages.trySend("${def.title}：記錄器套用中，約需 1 分鐘，期間不會回應…")
-        val actual = c.api.changeSetting(def.key, value, if (def.slowMs > 0) def.slowMs else 20_000)
+        val actual = c.api.changeSetting(def, value)
         if (actual != null) {
-            _ui.update { it.copy(properties = (it.properties + ("Camera.Menu.${def.key}" to actual)).toSortedMap()) }
+            _ui.update { it.copy(values = it.values + (def.key to actual)) }
         }
         when {
             actual.equals(value, ignoreCase = true) -> "${def.title}：已改為 ${def.labelOf(value)}"
+            def.deferred -> "${def.title}：已送出（${def.labelOf(value)}），記錄器會在 Wi-Fi 斷線後才變更"
             actual == null -> "${def.title}：已送出，但讀不到目前的值"
             else -> "${def.title}：記錄器沒有套用（目前仍是 ${def.labelOf(actual)}）"
         }
     }
 
     fun syncTime() = command {
-        val now = LocalDateTime.now().withNano(0)
+        val now = ZonedDateTime.now(ZoneId.systemDefault()).withNano(0)
         val result = c.api.syncTime(now)
-        val shown = now.format(DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"))
+        val shown = now.toLocalDateTime().format(DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"))
         if (result.ok) "已把記錄器時間設為 $shown" else "記錄器回應：${result.body.take(120)}"
     }
 
@@ -227,8 +212,6 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     companion object {
-        private const val FORMAT_TIMEOUT_MS = 90_000L
-
         fun factory(c: AppContainer) = viewModelFactory { initializer { DeviceViewModel(c) } }
     }
 }

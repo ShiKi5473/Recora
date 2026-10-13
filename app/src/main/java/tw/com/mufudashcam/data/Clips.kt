@@ -4,7 +4,10 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-/** 記錄器上的一個檔案。size = -1 表示未知（由前鏡頭推算出來、尚未確認存在的後鏡頭檔）。 */
+/**
+ * 記錄器上的一個檔案。size = -1 表示未知（由前鏡頭推算出來、尚未確認存在的後鏡頭檔）。
+ * [brand] = 哪一種記錄器上的檔案：下載佇列只在連著同一種記錄器時才下載它。
+ */
 data class DashcamFile(
     val name: String,
     val sdPath: String,
@@ -12,6 +15,7 @@ data class DashcamFile(
     val time: String,
     val folder: Folder,
     val guessed: Boolean = false,
+    val brand: Brand = Brand.Mufu,
 ) {
     val info: FileNames.Info? = FileNames.parse(name)
     val camera: Camera? get() = FileNames.cameraOf(sdPath)

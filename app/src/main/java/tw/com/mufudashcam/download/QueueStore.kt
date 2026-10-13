@@ -1,5 +1,6 @@
 package tw.com.mufudashcam.download
 
+import tw.com.mufudashcam.data.Brand
 import tw.com.mufudashcam.data.DashcamFile
 import tw.com.mufudashcam.data.FileNames
 import tw.com.mufudashcam.data.Folder
@@ -37,18 +38,24 @@ class QueueStore(private val file: File) {
     }
 
     companion object {
-        /** 一列一個檔案，欄位以 tab 分隔：sdPath、size、time、folder、guessed。 */
+        /** 一列一個檔案，欄位以 tab 分隔：sdPath、size、time、folder、guessed、brand。 */
         fun encode(files: List<DashcamFile>): String = files.joinToString("\n") { f ->
-            listOf(f.sdPath, f.size, f.time.replace(Regex("[\t\n]"), " "), f.folder.name, f.guessed).joinToString("\t")
+            listOf(f.sdPath, f.size, f.time.replace(Regex("[\t\n]"), " "), f.folder.name, f.guessed, f.brand.name)
+                .joinToString("\t")
         }
 
-        /** 讀不懂的列略過。 */
+        /** 讀不懂的列略過；支援 Astro 之前存的佇列沒有 brand 欄，都是 MUFU 的。 */
         fun decode(text: String): List<DashcamFile> = text.lineSequence().mapNotNull { line ->
             val parts = line.split('\t')
-            if (parts.size != 5 || !parts[0].startsWith("/")) return@mapNotNull null
+            if (parts.size !in 5..6 || !parts[0].startsWith("/")) return@mapNotNull null
             val size = parts[1].toLongOrNull() ?: return@mapNotNull null
             val folder = Folder.entries.firstOrNull { it.name == parts[3] } ?: return@mapNotNull null
-            DashcamFile(FileNames.basename(parts[0]), parts[0], size, parts[2], folder, guessed = parts[4] == "true")
+            val brand = if (parts.size == 6) {
+                Brand.entries.firstOrNull { it.name == parts[5] } ?: return@mapNotNull null
+            } else {
+                Brand.Mufu
+            }
+            DashcamFile(FileNames.basename(parts[0]), parts[0], size, parts[2], folder, guessed = parts[4] == "true", brand = brand)
         }.toList()
     }
 }

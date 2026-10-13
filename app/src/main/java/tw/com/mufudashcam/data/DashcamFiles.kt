@@ -19,9 +19,12 @@ import java.util.concurrent.ConcurrentHashMap
  * 手機連線期間記錄器停在 Standby、不會錄影，整段連線期間列表都不會變，所以每個資料夾只讀一次：
  * 斷線時清空，刪除時直接從快取移除，格式化後 [invalidateAll]。
  * 記錄器一次只服務一個連線，同一時間只讀一個資料夾，其他人排隊等（等到時多半已經有快取）。
+ * Astro 一個指令就回傳所有資料夾（[DashcamApi.listAll]），讀一次就填滿每個資料夾的快取。
+ * （Astro 連著時會繼續錄影，但讀列表時停錄，列表在一次連線中一樣不會變。）
  */
 class DashcamFiles(
-    private val api: DashcamApi,
+    /** 目前連著的記錄器（換記錄器一定會先斷線、清空快取）。 */
+    private val api: () -> DashcamApi,
     connection: DashcamConnection,
     scope: CoroutineScope,
 ) {
@@ -54,8 +57,15 @@ class DashcamFiles(
                 return@withLock
             }
             val gen = generation
+            val dashcam = api()
+            val everything = dashcam.listAll()
+            if (everything != null) {
+                if (gen == generation) Folder.entries.forEach { cache[it] = everything[it].orEmpty() }
+                emit(everything[folder].orEmpty())
+                return@withLock
+            }
             var all = emptyList<DashcamFile>()
-            api.listFolder(folder).collect {
+            dashcam.listFolder(folder).collect {
                 all = it
                 emit(it)
             }

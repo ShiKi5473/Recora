@@ -105,6 +105,12 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
         vm.refreshDownloaded()
         onPauseOrDispose { }
     }
+    // Astro：「檔案」頁可見時維持停錄＋檔案模式，離開約 10 秒後自動恢復錄影（MUFU 沒有動作）
+    val connectedNow = conn is tw.com.mufudashcam.data.net.ConnState.Connected
+    LifecycleResumeEffect(connectedNow) {
+        val lease = if (connectedNow) container.api.holdFiles("檔案頁") else tw.com.mufudashcam.data.api.Lease.NONE
+        onPauseOrDispose { lease.close() }
+    }
 
     // 畫面上的片段（套用「未下載」篩選），依日期分組
     val clips = remember(ui.clips, ui.onlyMissing, ui.downloaded, settings.includeRear) { ui.visibleClips(settings.includeRear) }

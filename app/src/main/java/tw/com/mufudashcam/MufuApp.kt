@@ -1,6 +1,7 @@
 package tw.com.mufudashcam
 
 import android.app.Application
+import android.os.Build
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
@@ -16,7 +17,10 @@ import okhttp3.OkHttpClient
 import tw.com.mufudashcam.data.DashcamFiles
 import tw.com.mufudashcam.data.DiagLog
 import tw.com.mufudashcam.data.SettingsStore
+import tw.com.mufudashcam.data.Brand
+import tw.com.mufudashcam.data.api.AstroApi
 import tw.com.mufudashcam.data.api.DashcamApi
+import tw.com.mufudashcam.data.api.MufuApi
 import tw.com.mufudashcam.data.net.DashcamConnection
 import tw.com.mufudashcam.data.net.RouteGuard
 import tw.com.mufudashcam.download.DownloadFolders
@@ -36,6 +40,11 @@ class MufuApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        // 車上連著記錄器時沒辦法接電腦：紀錄寫進 Android/data/tw.com.mufudashcam/files/diag/，回來再 adb pull
+        DiagLog.init(
+            getExternalFilesDir("diag"),
+            "App 啟動 ${BuildConfig.VERSION_NAME}（${Build.MANUFACTURER} ${Build.MODEL}，Android ${Build.VERSION.RELEASE}）",
+        )
         container = AppContainer(this)
         container.connection.start()
         // 上次匯出到一半 App 被關掉時留下的暫存檔
@@ -70,17 +79,26 @@ class AppContainer(val app: Application) {
         .addInterceptor(RouteGuard { connection.canReachDashcam })
         .build()
 
-    val api = DashcamApi(http, settings)
-    val connection = DashcamConnection(app, api, settings, appScope)
-    val files = DashcamFiles(api, connection, appScope)
+    private val mufu = MufuApi(http, settings)
+    private val astro = AstroApi(http, settings, appScope)
+    private fun apiOf(brand: Brand): DashcamApi = if (brand == Brand.Astro) astro else mufu
+    val connection = DashcamConnection(app, mapOf(Brand.Mufu to mufu, Brand.Astro to astro), settings, appScope)
+
+    /**
+     * 目前的記錄器介面：連著的那一種，否則連線卡片選的。每次使用時才取，
+     * 不要存在長壽命的變數裡（換品牌後會拿到舊的實作）。
+     */
+    val api: DashcamApi get() = apiOf(connection.currentBrand)
+
+    val files = DashcamFiles({ api }, connection, appScope)
     val sink = MediaStoreSink(app) { settings.state.value.libraryFolders }
     val downloads = DownloadRepository(
-        app, api, sink, http, appScope,
+        app, ::apiOf, sink, http, appScope,
         queueStore = QueueStore(File(app.filesDir, "download_queue.tsv")),
         subdirOf = { file -> DownloadFolders.subdir(file, settings.state.value.downloadSubfolder) },
     ) {
         // 兩個條件都要：斷線的瞬間（狀態還沒更新但已解除綁定）不會一直重跑被 RouteGuard 擋下的檔案
-        connection.isConnected && connection.canReachDashcam
+        if (connection.isConnected && connection.canReachDashcam) connection.boundBrand else null
     }
     val eventBackup = EventBackup(files, sink, downloads, settings)
 
@@ -98,12 +116,19 @@ class AppContainer(val app: Application) {
     val libraryTabRequest = MutableStateFlow<MediaKind?>(null)
 
     init {
-        connection.onConnected = {
+        connection.onConnected = { dashcam ->
             // 同官方 App：每次連上都把手機時間寫入記錄器
             try {
-                api.syncTime()
+                val sync = dashcam.syncTime()
+                DiagLog.log("對時：${if (sync.ok) "成功" else "失敗"}（${DiagLog.compact(sync.body, 80)}）")
             } catch (e: IOException) {
                 // 對時失敗不影響其他功能
+            }
+            // Astro：保持連線、確認記錄器有在錄影
+            try {
+                dashcam.onConnected()
+            } catch (e: IOException) {
+                DiagLog.log("連線後初始化失敗：${e.message}")
             }
             // App 設定：連上時自動備份還沒下載的緊急錄影（先讀完列表再開始下載，不跟下載搶記錄器的連線）
             if (settings.current().autoBackupEvents) {

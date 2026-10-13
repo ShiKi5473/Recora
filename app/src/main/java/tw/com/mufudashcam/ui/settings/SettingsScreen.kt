@@ -157,11 +157,19 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 }
             }
 
-            Section("記錄器 Wi-Fi") {
+            Section("MUFU 記錄器 Wi-Fi") {
                 WifiFields(
                     ssidPrefix = settings.ssidPrefix,
                     password = settings.wifiPassword,
                     onSave = { prefix, pwd -> update { it.copy(ssidPrefix = prefix, wifiPassword = pwd) } },
+                )
+            }
+
+            Section("Astro 記錄器 Wi-Fi") {
+                WifiFields(
+                    ssidPrefix = settings.astroSsidPrefix,
+                    password = settings.astroWifiPassword,
+                    onSave = { prefix, pwd -> update { it.copy(astroSsidPrefix = prefix, astroWifiPassword = pwd) } },
                 )
             }
         }

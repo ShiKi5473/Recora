@@ -12,6 +12,12 @@ object DashcamConfig {
 
     /** 本機下載資料夾（Movies/ 或 Pictures/ 底下）。 */
     const val LOCAL_DIR = "MufuDashcam"
+
+    /** Astro LEO3（Novatek，ASTRO_LEO3_API.md）。 */
+    const val ASTRO_HOST = "192.168.1.254"
+    const val ASTRO_SSID_PREFIX = "Astrofamily_"
+
+    fun defaultHost(brand: Brand): String = if (brand == Brand.Astro) ASTRO_HOST else DEFAULT_HOST
 }
 
 /** dir 的資料夾名稱 ↔ SD 卡上的目錄（對應 dashcam_download.py 的 FOLDER_DIR）。 */

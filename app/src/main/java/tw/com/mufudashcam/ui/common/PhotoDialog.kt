@@ -56,6 +56,12 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     var items by remember { mutableStateOf(photos) }
     val pager = rememberPagerState(initialPage = startIndex.coerceIn(photos.indices)) { items.size }
+    // 看記錄器上的照片時維持檔案模式（Astro 要停錄；MUFU 沒有動作）
+    val fromDashcam = photos.any { it.sdPath != null }
+    androidx.compose.runtime.DisposableEffect(fromDashcam) {
+        val lease = if (fromDashcam) container.api.holdFiles("看照片") else tw.com.mufudashcam.data.api.Lease.NONE
+        onDispose { lease.close() }
+    }
     var pendingDelete by remember { mutableStateOf<PlayItem?>(null) }
     val deleteItem = rememberMediaDeleter(container, toast) { item, deleted ->
         if (deleted) {

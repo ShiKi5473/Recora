@@ -281,7 +281,12 @@ fun PlayerScreen(
         if (container.downloads.hold()) {
             Toast.makeText(context, "已暫停下載，離開播放畫面後會從中斷處繼續", Toast.LENGTH_SHORT).show()
         }
-        onDispose { container.downloads.release() }
+        // Astro：串流播放期間維持檔案模式（停錄）；離開後約 10 秒恢復錄影
+        val lease = container.api.holdFiles("串流播放")
+        onDispose {
+            container.downloads.release()
+            lease.close()
+        }
     }
 
     val onEndedState = rememberUpdatedState(::onEnded)

@@ -12,6 +12,12 @@ enum class Brand(val label: String) {
 
     /** 看不出來源，例如改過名的檔案。 */
     Other("其它"),
+    ;
+
+    companion object {
+        /** App 能連線的記錄器（連線卡片的切換順序）。 */
+        val dashcams: List<Brand> = listOf(Mufu, Astro)
+    }
 }
 
 /**
@@ -26,6 +32,10 @@ object FileNames {
     private val NAME_RE = Regex("""^([A-Za-z]+)(\d{6})-(\d{6})([FR])?(?:_P\d)?\.(\w+)$""", RegexOption.IGNORE_CASE)
     private val FRONT_RE = Regex("""/F/([^/]+)F\.(\w+)$""")
     private val REAR_RE = Regex("""/R/([^/]+)R\.(\w+)$""")
+
+    /** Astro（Novatek）的資料夾：/DCIM/VIDEO_F/xxxF.MP4 ↔ /DCIM/VIDEO_R/xxxR.MP4。 */
+    private val NVT_FRONT_RE = Regex("""_F/([^/]+)F\.(\w+)$""")
+    private val NVT_REAR_RE = Regex("""_R/([^/]+)R\.(\w+)$""")
 
     /** Astro 行車記錄器（Astro 的 App 存到手機的）：20260814081925_002902F.MP4 = 年月日時分秒_序號＋鏡頭。 */
     private val ASTRO_RE = Regex("""^\d{2}(\d{6})(\d{6})_\d+([FR])?\.(\w+)$""", RegexOption.IGNORE_CASE)
@@ -84,8 +94,8 @@ object FileNames {
     }
 
     fun cameraOf(path: String): Camera? = when {
-        "/R/" in path -> Camera.Rear
-        "/F/" in path -> Camera.Front
+        "/R/" in path || "_R/" in path -> Camera.Rear
+        "/F/" in path || "_F/" in path -> Camera.Front
         else -> parse(basename(path))?.camera
     }
 
@@ -95,11 +105,15 @@ object FileNames {
         return frontPath.replaceRange(m.range, "/R/${m.groupValues[1]}R.${m.groupValues[2]}")
     }
 
-    /** 另一鏡頭的 SD 卡路徑：/F/xxxF.TS ↔ /R/xxxR.TS，看不出鏡頭則回 null。 */
+    /**
+     * 另一鏡頭的 SD 卡路徑：MUFU /F/xxxF.TS ↔ /R/xxxR.TS，Astro /DCIM/VIDEO_F/xxxF.MP4 ↔ /DCIM/VIDEO_R/xxxR.MP4；
+     * 看不出鏡頭則回 null。
+     */
     fun counterpartPath(sdPath: String): String? =
-        rearPathOf(sdPath) ?: REAR_RE.find(sdPath)?.let { m ->
-            sdPath.replaceRange(m.range, "/F/${m.groupValues[1]}F.${m.groupValues[2]}")
-        }
+        rearPathOf(sdPath)
+            ?: REAR_RE.find(sdPath)?.let { m -> sdPath.replaceRange(m.range, "/F/${m.groupValues[1]}F.${m.groupValues[2]}") }
+            ?: NVT_FRONT_RE.find(sdPath)?.let { m -> sdPath.replaceRange(m.range, "_R/${m.groupValues[1]}R.${m.groupValues[2]}") }
+            ?: NVT_REAR_RE.find(sdPath)?.let { m -> sdPath.replaceRange(m.range, "_F/${m.groupValues[1]}F.${m.groupValues[2]}") }
 
     /** 檔名看得出的鏡頭；剪輯檔、截圖檔看來源的部分。 */
     fun cameraOfName(name: String): Camera? = when (CAMERA_RE.matchEntire(name)?.groupValues?.get(2)?.uppercase()) {

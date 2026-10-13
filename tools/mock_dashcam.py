@@ -21,6 +21,8 @@ import urllib.parse
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import mock_astro  # 同資料夾：--brand astro 的 Novatek 指令（python tools/mock_dashcam.py --brand astro）
+
 SD_ROOT = "/mnt/mmc"
 FOLDERS = {"Normal": "Video", "Event": "Emergency", "Parking": "Parking", "Photo": "Picture"}
 CYCLE = bytes(range(256)) * 4096  # 1 MB 的循環樣式
@@ -118,6 +120,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self, send_body):
         url = urllib.parse.urlsplit(self.path)
+        if self.opts.brand == "astro" and url.path in ("/", ""):
+            return self._text(mock_astro.dispatch(self, url.query), ctype="text/xml")
         if url.path == "/cgi-bin/Config.cgi":
             # 實機的 CGI 不會把 %24 解回 $：del / TimeSettings 送 %24 會找不到
             if "%24" in url.query:
@@ -193,7 +197,9 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 靜態檔案（支援 Range） ------------------------------------------------
     def _static(self, path, send_body):
         style = self.opts.path_style
-        if path.startswith(SD_ROOT + "/"):
+        if self.opts.brand == "astro":
+            sd = path if path.startswith("/DCIM/") else None
+        elif path.startswith(SD_ROOT + "/"):
             sd = path if style in ("mnt", "both") else None
         else:
             sd = SD_ROOT + path if style in ("root", "both") else None
@@ -271,12 +277,17 @@ def main():
     ap.add_argument("--throttle", type=int, default=0, help="限速 KB/s（0 = 不限）")
     ap.add_argument("--drop-every", type=int, default=0, help="每個回應送這麼多 KB 就斷線（0 = 不斷）")
     ap.add_argument("--path-style", choices=("both", "mnt", "root"), default="both")
+    ap.add_argument("--brand", choices=("mufu", "astro"), default="mufu", help="模擬哪一種記錄器（astro = Novatek LEO3）")
     opts = ap.parse_args()
 
-    Handler.store = Store(opts.clips, opts.size_kb, opts.events, opts.photos)
+    if opts.brand == "astro":
+        Handler.store = Store(0, 0, 0, 0)
+        mock_astro.fill(Handler.store, opts.clips, opts.size_kb, opts.events)
+    else:
+        Handler.store = Store(opts.clips, opts.size_kb, opts.events, opts.photos)
     Handler.opts = opts
     server = ThreadingHTTPServer((opts.host, opts.port), Handler)
-    print(f"假記錄器：http://{opts.host}:{opts.port}  （{len(Handler.store.files)} 個檔案，"
+    print(f"假記錄器（{opts.brand}）：http://{opts.host}:{opts.port}  （{len(Handler.store.files)} 個檔案，"
           f"路徑樣式 {opts.path_style}，限速 {opts.throttle or '無'} KB/s）")
     try:
         server.serve_forever()

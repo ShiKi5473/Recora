@@ -32,7 +32,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.FilterChip
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
+import tw.com.mufudashcam.data.Brand
 import tw.com.mufudashcam.data.net.ConnState
 
 /** TopAppBar 右上角的連線狀態；已連線時點一下可中斷。 */
@@ -48,7 +53,7 @@ fun ConnectionChip(container: AppContainer) {
             label = {
                 Text(
                     when (val s = state) {
-                        is ConnState.Connected -> if (s.viaOverride) "測試模式" else "已連線"
+                        is ConnState.Connected -> if (s.viaOverride) "測試：${s.brand.label}" else "已連線：${s.brand.label}"
                         ConnState.Requesting -> "連線中…"
                         else -> "未連線"
                     },
@@ -75,19 +80,32 @@ fun ConnectionChip(container: AppContainer) {
     }
 }
 
-/** 尚未連線時的說明與連線按鈕。 */
+/** 尚未連線時的說明與連線按鈕；可切換要連 MUFU 還是 Astro（記住上次的選擇）。 */
 @Composable
 fun NotConnectedPane(container: AppContainer, modifier: Modifier = Modifier) {
     val state by container.connection.state.collectAsStateWithLifecycle()
     val settings by container.settings.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val brand = settings.dashcamBrand
     MessagePane(
         icon = Icons.Filled.WifiOff,
         title = "尚未連線到記錄器",
         text = "1. 確認記錄器已開機、Wi-Fi 已開啟\n" +
-            "2. 按下方按鈕，在系統視窗選擇 ${settings.ssidPrefix} 開頭的 Wi-Fi\n" +
-            "（連線後手機的行動網路照常可用）",
+            "2. 按下方按鈕，在系統視窗選擇 ${settings.ssidPrefixFor(brand)} 開頭的 Wi-Fi\n" +
+            "（連線後手機的行動網路照常可用；也可以先在系統設定連上，App 會自動偵測）",
         modifier = modifier,
     ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Brand.dashcams.forEach { b ->
+                FilterChip(
+                    selected = brand == b,
+                    onClick = { scope.launch { container.settings.update { it.copy(dashcamBrand = b) } } },
+                    label = { Text(b.label) },
+                    enabled = state != ConnState.Requesting,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
         (state as? ConnState.Failed)?.let {
             Text(it.message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
@@ -97,7 +115,7 @@ fun NotConnectedPane(container: AppContainer, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(8.dp))
             TextButton(onClick = { container.connection.cancelRequest() }) { Text("取消") }
         } else {
-            Button(onClick = { container.connection.connect() }) { Text("連線到記錄器") }
+            Button(onClick = { container.connection.connect() }) { Text("連線到 ${brand.label} 記錄器") }
         }
     }
 }

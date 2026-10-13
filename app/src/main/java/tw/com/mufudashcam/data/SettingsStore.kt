@@ -41,8 +41,13 @@ enum class SubfolderMode(val label: String) {
 enum class ExportQuality(val label: String) { High("高"), Standard("標準"), Small("省空間") }
 
 data class AppSettings(
+    /** MUFU 的 Wi-Fi 密碼與 SSID 開頭（沿用改版前的設定名稱）。 */
     val wifiPassword: String = DashcamConfig.DEFAULT_PASSWORD,
     val ssidPrefix: String = DashcamConfig.DEFAULT_SSID_PREFIX,
+    /** 連線卡片上選的記錄器（記住上次的選擇）。 */
+    val dashcamBrand: Brand = Brand.Mufu,
+    val astroWifiPassword: String = DashcamConfig.DEFAULT_PASSWORD,
+    val astroSsidPrefix: String = DashcamConfig.ASTRO_SSID_PREFIX,
     /** 下載時預設一併下載後鏡頭。 */
     val includeRear: Boolean = true,
     /** 連上記錄器時，把還沒下載的緊急錄影自動加入下載佇列。 */
@@ -70,7 +75,13 @@ data class AppSettings(
     val dynamicColor: Boolean = true,
 ) {
     val overrideActive: Boolean get() = BuildConfig.DEBUG && hostOverride.isNotBlank()
-    val host: String get() = if (overrideActive) hostOverride.trim() else DashcamConfig.DEFAULT_HOST
+
+    /** debug 的位址覆寫對兩種記錄器都有效（假記錄器依 --brand 模擬其中一種）。 */
+    fun hostFor(brand: Brand): String = if (overrideActive) hostOverride.trim() else DashcamConfig.defaultHost(brand)
+
+    fun ssidPrefixFor(brand: Brand): String = if (brand == Brand.Astro) astroSsidPrefix else ssidPrefix
+
+    fun passwordFor(brand: Brand): String = if (brand == Brand.Astro) astroWifiPassword else wifiPassword
 }
 
 /** enum 存成名稱；讀不到或已不存在的值（例如改版拿掉的選項）退回 [default]。 */
@@ -85,6 +96,9 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
     private object Keys {
         val password = stringPreferencesKey("wifi_password")
         val ssidPrefix = stringPreferencesKey("ssid_prefix")
+        val dashcamBrand = stringPreferencesKey("dashcam_brand")
+        val astroPassword = stringPreferencesKey("astro_wifi_password")
+        val astroSsidPrefix = stringPreferencesKey("astro_ssid_prefix")
         val includeRear = booleanPreferencesKey("include_rear")
         val autoBackupEvents = booleanPreferencesKey("auto_backup_events")
         val downloadSubfolder = stringPreferencesKey("download_subfolder")
@@ -117,6 +131,9 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         return AppSettings(
             wifiPassword = p[Keys.password] ?: d.wifiPassword,
             ssidPrefix = p[Keys.ssidPrefix] ?: d.ssidPrefix,
+            dashcamBrand = enumOr(p[Keys.dashcamBrand], d.dashcamBrand).takeIf { it in Brand.dashcams } ?: d.dashcamBrand,
+            astroWifiPassword = p[Keys.astroPassword] ?: d.astroWifiPassword,
+            astroSsidPrefix = p[Keys.astroSsidPrefix] ?: d.astroSsidPrefix,
             includeRear = p[Keys.includeRear] ?: d.includeRear,
             autoBackupEvents = p[Keys.autoBackupEvents] ?: d.autoBackupEvents,
             downloadSubfolder = enumOr(p[Keys.downloadSubfolder], d.downloadSubfolder),
@@ -138,6 +155,9 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
     private fun write(p: MutablePreferences, s: AppSettings) {
         p[Keys.password] = s.wifiPassword
         p[Keys.ssidPrefix] = s.ssidPrefix
+        p[Keys.dashcamBrand] = s.dashcamBrand.name
+        p[Keys.astroPassword] = s.astroWifiPassword
+        p[Keys.astroSsidPrefix] = s.astroSsidPrefix
         p[Keys.includeRear] = s.includeRear
         p[Keys.autoBackupEvents] = s.autoBackupEvents
         p[Keys.downloadSubfolder] = s.downloadSubfolder.name
