@@ -1,8 +1,8 @@
-# MUFU 記錄器（Android App）
+# 行車記錄器（Android App）
 
-連上 MUFU V60P 行車記錄器的 Wi-Fi，瀏覽、播放、下載 SD 卡上的影片和照片，並在手機上剪輯。
+連上行車記錄器（MUFU V60P、Astro LEO3 等）的 Wi-Fi，瀏覽、播放、下載 SD 卡上的影片和照片，並在手機上剪輯。
 自用、側載安裝，目標 Android 16（minSdk 30）。
-API 規格見 [MUFU_V60P_API.md](MUFU_V60P_API.md)（已在實機上驗證），電腦版下載工具見 [dashcam_download.py](dashcam_download.py)。
+API 規格見 [MUFU_V60P_API.md](MUFU_V60P_API.md) 與 [ASTRO_LEO3_API.md](ASTRO_LEO3_API.md)，電腦版下載工具見 [dashcam_download.py](dashcam_download.py)。
 
 ## 功能
 
@@ -16,7 +16,7 @@ API 規格見 [MUFU_V60P_API.md](MUFU_V60P_API.md)（已在實機上驗證），
   - 可以只看還沒下載的片段、跳到某一天；多選時「選取範圍」會把頭尾之間全部選起來。
   - 右上選單：選取未下載的、選取已下載的（接著可以從記錄器刪除，釋放記憶卡空間）、備份所有未下載的緊急錄影。
 - **下載**：長按進入多選，可下載「前+後」、「只下載前鏡頭」或「只下載後鏡頭」。
-  - 影片存到 `Movies/MufuDashcam`，照片存到 `Pictures/MufuDashcam`，相簿看得到；可在設定裡改成依類型或依日期分子資料夾。
+  - 影片存到 `Movies/Dashcam`（相容舊版 `Movies/MufuDashcam`），照片存到 `Pictures/Dashcam`，相簿看得到；可在設定裡改成依類型或依日期分子資料夾。
   - 一次下載一個檔案，連線中斷時從中斷處續傳。
   - 與記錄器的連線斷掉時，沒下載完的檔案會留在佇列等待，重新連上後自動接著下載。
   - App 被關掉後，佇列會保留，下次連上記錄器時從上次中斷處接著下載。
@@ -65,7 +65,7 @@ Astro 預設 SSID 開頭 `Astrofamily_`、密碼 `12345678`（改過密碼要到
 在車上連著記錄器時沒辦法同時接電腦，所以 App 會把診斷紀錄（每個請求與回應）寫成檔案，保留 7 天。回來接 USB：
 
 ```bash
-adb pull /sdcard/Android/data/tw.com.mufudashcam/files/diag/
+adb pull /sdcard/Android/data/tw.com.dashcam/files/diag/
 adb pull /sdcard/Android/data/com.ligo.aAstroCam/files/ZyLog/    # 官方 App 的紀錄（若同時用它對照）
 ```
 
@@ -99,7 +99,7 @@ python tools/mock_dashcam.py --brand astro                  # 模擬 Astro LEO3�
 
 ```bash
 adb reverse tcp:8080 tcp:8080
-adb shell am start -n tw.com.mufudashcam/.MainActivity --es host_override 127.0.0.1:8080
+adb shell am start -n tw.com.dashcam/.MainActivity --es host_override 127.0.0.1:8080
 # 傳空字串 --es host_override "''" 就回到連真實記錄器
 ```
 

@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "MufuDashcam"
+rootProject.name = "Dashcam"
 include(":app")

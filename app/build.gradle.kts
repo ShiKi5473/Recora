@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "tw.com.mufudashcam"
+    namespace = "tw.com.dashcam"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "tw.com.mufudashcam"
+        applicationId = "tw.com.dashcam"
         minSdk = 30
         targetSdk = 36
         versionCode = 1

@@ -312,4 +312,4 @@ adb shell curl --interface wlan0 -r 0-1023 -o /dev/null -w "%{http_code}\n" "htt
 adb pull /sdcard/Android/data/com.ligo.aAstroCam/files/ZyLog/
 ```
 
-檔案下載不會記錄，只有指令。本 App 自己的診斷紀錄在 `/sdcard/Android/data/tw.com.mufudashcam/files/diag/`。
+檔案下載不會記錄，只有指令。本 App 自己的診斷紀錄在 `/sdcard/Android/data/tw.com.dashcam/files/diag/`。
