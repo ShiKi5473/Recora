@@ -61,6 +61,21 @@ class ClipsTest {
     }
 
     @Test
+    fun filesToDeleteFollowsRearChoice() {
+        val both = Clips.group(
+            listOf(
+                file("/mnt/mmc/Video/F/FILE260923-131459F.TS"),
+                file("/mnt/mmc/Video/R/FILE260923-131459R.TS"),
+            ),
+        ).single()
+        assertEquals(listOf(both.front, both.rear), Clips.filesToDelete(both, includeRear = true))
+        assertEquals(listOf(both.front), Clips.filesToDelete(both, includeRear = false))
+        // 只有後鏡頭：沒勾「一併刪除後鏡頭檔」也要刪，否則這一段什麼都沒刪卻算成功
+        val rearOnly = Clip("k", null, file("/mnt/mmc/Video/R/FILE260923-131459R.TS"))
+        assertEquals(listOf(rearOnly.rear), Clips.filesToDelete(rearOnly, includeRear = false))
+    }
+
+    @Test
     fun downloadedNeedsMatchingSize() {
         val f = file("/mnt/mmc/Video/F/FILE260923-131459F.TS", size = 100)
         assertTrue(Clips.isDownloaded(f, mapOf("FILE260923-131459F.TS" to 100L)))

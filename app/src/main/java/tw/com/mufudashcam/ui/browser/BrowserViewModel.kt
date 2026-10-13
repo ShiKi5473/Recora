@@ -57,6 +57,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
     val messages: Flow<String> = _messages.receiveAsFlow()
 
     private var loadJob: Job? = null
+    private var downloadedJob: Job? = null
 
     /** 使用者自己換過分頁：之後讀到設定也不改回「開啟時顯示的資料夾」。 */
     private var folderPicked = false
@@ -81,6 +82,8 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
                 .distinctUntilChanged()
                 .collect { refreshDownloaded() }
         }
+        // 手機上的檔案被刪掉（相簿、播放器）：打勾與「選取已下載的」要跟著更新
+        viewModelScope.launch { c.libraryChanged.collect { refreshDownloaded() } }
         // 在播放器刪掉記錄器上的檔案、或格式化記憶卡後，列表要跟著更新（快取已由對方更新）
         viewModelScope.launch {
             c.dashcamChanged.collect { if (c.connection.isConnected) load() }
@@ -127,18 +130,27 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     fun setOnlyMissing(on: Boolean) = _ui.update { it.copy(onlyMissing = on, selection = emptySet()) }
 
-    /** 選取畫面上還有檔案沒下載的片段。 */
+    /** 選取畫面上還有檔案沒下載的片段（先重讀手機上的檔案）。 */
     fun selectMissing(visible: List<Clip>, includeRear: Boolean) {
-        val keys = visible.filter { Clips.isMissing(it, includeRear, _ui.value.downloaded) }.map { it.key }
-        _ui.update { it.copy(selection = keys.toSet()) }
-        if (keys.isEmpty()) _messages.trySend("這裡的檔案都下載過了")
+        viewModelScope.launch {
+            val downloaded = loadDownloaded()
+            val keys = visible.filter { Clips.isMissing(it, includeRear, downloaded) }.map { it.key }
+            _ui.update { it.copy(selection = keys.toSet()) }
+            if (keys.isEmpty()) _messages.trySend("這裡的檔案都下載過了")
+        }
     }
 
-    /** 選取畫面上已經全部下載到手機的片段，接著可以從記錄器刪除、釋放記憶卡空間。 */
+    /**
+     * 選取畫面上已經全部下載到手機的片段，接著可以從記錄器刪除、釋放記憶卡空間。
+     * 先重讀手機上的檔案：剛在相簿或別的 App 刪掉的，不能被當成已備份。
+     */
     fun selectBackedUp(visible: List<Clip>) {
-        val keys = visible.filter { Clips.isBackedUp(it, _ui.value.downloaded) }.map { it.key }
-        _ui.update { it.copy(selection = keys.toSet()) }
-        _messages.trySend(if (keys.isEmpty()) "沒有已經完整下載的片段" else "已選取 ${keys.size} 段已下載到手機的片段，可以從記錄器刪除")
+        viewModelScope.launch {
+            val downloaded = loadDownloaded()
+            val keys = visible.filter { Clips.isBackedUp(it, downloaded) }.map { it.key }
+            _ui.update { it.copy(selection = keys.toSet()) }
+            _messages.trySend(if (keys.isEmpty()) "沒有已經完整下載的片段" else "已選取 ${keys.size} 段已下載到手機的片段，可以從記錄器刪除")
+        }
     }
 
     /** 把還沒下載的緊急錄影全部加入下載佇列。 */
@@ -181,7 +193,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
             val deleted = ArrayList<String>()
             for (clip in clips) {
                 var clipOk = true
-                for (f in listOfNotNull(clip.front, if (includeRear) clip.rear else null)) {
+                for (f in Clips.filesToDelete(clip, includeRear)) {
                     // 推算出來的後鏡頭檔不一定存在，刪除失敗不算錯
                     val ok = try {
                         c.api.delete(f.sdPath).ok
@@ -220,11 +232,16 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     fun thumbnailUrl(file: DashcamFile): String = c.api.httpUrl(file.sdPath)
 
-    private fun refreshDownloaded() {
-        viewModelScope.launch {
-            val map = withContext(Dispatchers.IO) { runCatching { c.sink.downloaded() }.getOrDefault(emptyMap()) }
-            _ui.update { it.copy(downloaded = map) }
-        }
+    /** 重讀手機上已下載的檔案（打勾、「未下載」篩選、「選取已下載的」都靠它）；連續觸發時只留最後一次。 */
+    fun refreshDownloaded() {
+        downloadedJob?.cancel()
+        downloadedJob = viewModelScope.launch { loadDownloaded() }
+    }
+
+    private suspend fun loadDownloaded(): Map<String, Long> {
+        val map = withContext(Dispatchers.IO) { runCatching { c.sink.downloaded() }.getOrDefault(emptyMap()) }
+        _ui.update { it.copy(downloaded = map) }
+        return map
     }
 
     companion object {

@@ -148,9 +148,9 @@ fun PlayerScreen(
     var loadJob by remember { mutableStateOf<Job?>(null) }
     var endHandled by remember { mutableStateOf(false) }
 
-    /** 手機上已下載完成的同名影片（content://），沒有回 null。 */
+    /** 手機上已下載完成的同名影片（content://，含 Astro App 的資料夾），沒有回 null。 */
     suspend fun localCopy(name: String): String? = withContext(Dispatchers.IO) {
-        runCatching { container.sink.find(name, isImage = false) }.getOrNull()?.takeIf { !it.pending }?.uri?.toString()
+        runCatching { container.sink.findVideo(name) }.getOrNull()?.toString()
     }
 
     /** 另一個鏡頭的同一段：手機上有就播手機上的，否則從記錄器串流（不先探測，沒有這個檔時播放會失敗並提示）。 */

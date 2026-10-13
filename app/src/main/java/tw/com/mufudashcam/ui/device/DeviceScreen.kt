@@ -1,5 +1,6 @@
 package tw.com.mufudashcam.ui.device
 
+import android.content.ClipData
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -32,18 +33,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.BuildConfig
 import tw.com.mufudashcam.data.Folder
@@ -300,13 +303,16 @@ private fun FormatDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
 private fun ConnectionLog(container: AppContainer) {
     val lines by container.connection.log.collectAsStateWithLifecycle()
     if (lines.isEmpty()) return
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     Section("診斷紀錄") {
         Text(
             lines.takeLast(30).joinToString("\n"),
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
         )
-        TextButton(onClick = { clipboard.setText(AnnotatedString(lines.joinToString("\n"))) }) { Text("複製紀錄") }
+        TextButton(onClick = {
+            scope.launch { clipboard.setClipEntry(ClipData.newPlainText("診斷紀錄", lines.joinToString("\n")).toClipEntry()) }
+        }) { Text("複製紀錄") }
     }
 }

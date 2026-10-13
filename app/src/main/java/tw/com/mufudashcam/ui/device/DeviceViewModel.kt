@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,8 +72,11 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             } catch (e: IOException) {
                 _ui.update { it.copy(loading = false, error = "讀取失敗：${e.message}") }
             }
-            refreshRecordStatus()
-            refreshCardStatus()
+            // 記錄器一次只服務一個連線：狀態、容量依序讀，不同時送
+            val record = readRecordStatus()
+            _ui.update { it.copy(recordStatus = record) }
+            val card = readCardStatus()
+            _ui.update { it.copy(cardStatus = card) }
             if (_ui.value.usage == null) refreshUsage()
         }
     }
@@ -107,14 +111,17 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
 
     fun refreshCardStatus() {
         viewModelScope.launch {
-            val status = try {
-                c.api.cardStatus() ?: "記錄器沒有回報"
-            } catch (e: IOException) {
-                "讀取失敗：${e.message}"
-            }
+            val status = readCardStatus()
             _ui.update { it.copy(cardStatus = status) }
         }
     }
+
+    private suspend fun readCardStatus(): String =
+        try {
+            c.api.cardStatus() ?: "記錄器沒有回報"
+        } catch (e: IOException) {
+            "讀取失敗：${e.message}"
+        }
 
     /**
      * 格式化記憶卡：送出指令後輪詢 Camera.Menu.SD0，直到記錄器回報 READY。
@@ -130,7 +137,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             val message = try {
                 val result = c.api.formatCard()
                 DiagLog.log("格式化記憶卡：${DiagLog.compact(result.body)}")
-                kotlinx.coroutines.delay(2000)
+                delay(2000)
                 var last: String? = null
                 var sawBusy = false
                 val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
@@ -143,7 +150,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
                     _ui.update { it.copy(cardStatus = last ?: "等待記錄器回應…") }
                     if (last != null && !last.equals("READY", ignoreCase = true)) sawBusy = true
                     if (last.equals("READY", ignoreCase = true) && (sawBusy || c.api.isCardEmpty())) break
-                    kotlinx.coroutines.delay(1000)
+                    delay(1000)
                 }
                 when {
                     last.equals("READY", ignoreCase = true) -> "格式化完成，記憶卡已清空"
@@ -157,21 +164,25 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             // 不管成功與否，列表都可能已經變了
             c.files.invalidateAll()
             c.dashcamChanged.tryEmit(Unit)
-            refreshCardStatus()
+            val card = readCardStatus()
+            _ui.update { it.copy(cardStatus = card) }
             refreshUsage()
         }
     }
 
     fun refreshRecordStatus() {
         viewModelScope.launch {
-            val status = try {
-                c.api.recordingStatus() ?: "記錄器沒有回報"
-            } catch (e: IOException) {
-                "讀取失敗：${e.message}"
-            }
+            val status = readRecordStatus()
             _ui.update { it.copy(recordStatus = status) }
         }
     }
+
+    private suspend fun readRecordStatus(): String =
+        try {
+            c.api.recordingStatus() ?: "記錄器沒有回報"
+        } catch (e: IOException) {
+            "讀取失敗：${e.message}"
+        }
 
     /** 修改記錄器設定，讀回確認是否真的套用。 */
     fun changeSetting(def: SettingDef, value: String) = command {

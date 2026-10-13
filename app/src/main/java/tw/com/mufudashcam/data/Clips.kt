@@ -50,6 +50,10 @@ object Clips {
     fun filesFor(clip: Clip, includeRear: Boolean): List<DashcamFile> =
         filesFor(clip, if (includeRear) DownloadChoice.Both else DownloadChoice.FrontOnly)
 
+    /** 從記錄器刪除這一段時要刪的檔案：前鏡頭，加上後鏡頭（[includeRear]，或這一段只有後鏡頭時）。 */
+    fun filesToDelete(clip: Clip, includeRear: Boolean): List<DashcamFile> =
+        listOfNotNull(clip.front, clip.rear?.takeIf { includeRear || clip.front == null })
+
     /** 已經下載到手機（[downloaded]：大寫檔名 → 大小）且大小相符；記錄器上大小未知時只看檔名。 */
     fun isDownloaded(file: DashcamFile, downloaded: Map<String, Long>): Boolean {
         val local = downloaded[file.name.uppercase()] ?: return false

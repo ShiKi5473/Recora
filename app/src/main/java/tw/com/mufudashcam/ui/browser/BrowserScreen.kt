@@ -64,6 +64,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
@@ -99,6 +100,11 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
     var viewingPhoto by remember { mutableStateOf<DashcamFile?>(null) }
 
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(it) } }
+    // 回到這個分頁時重讀手機上的檔案（例如在別的 App 刪了已下載的影片），打勾才不會過期
+    LifecycleResumeEffect(vm) {
+        vm.refreshDownloaded()
+        onPauseOrDispose { }
+    }
 
     // 畫面上的片段（套用「未下載」篩選），依日期分組
     val clips = remember(ui.clips, ui.onlyMissing, ui.downloaded, settings.includeRear) { ui.visibleClips(settings.includeRear) }

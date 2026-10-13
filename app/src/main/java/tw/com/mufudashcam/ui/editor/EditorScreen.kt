@@ -179,7 +179,7 @@ fun EditorScreen(
         val found = withContext(Dispatchers.IO) {
             segments.map { s ->
                 FileNames.counterpartName(s.title)?.let { name ->
-                    runCatching { container.sink.find(name, isImage = false) }.getOrNull()?.takeIf { !it.pending }?.uri?.toString()
+                    runCatching { container.sink.findVideo(name) }.getOrNull()?.toString()
                 }
             }
         }

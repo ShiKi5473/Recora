@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.PatternMatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import tw.com.mufudashcam.data.DiagLog
 import tw.com.mufudashcam.data.SettingsStore
 import tw.com.mufudashcam.data.api.DashcamApi
@@ -58,7 +60,7 @@ class DashcamConnection(
     /** 診斷紀錄（與 API 請求共用）。 */
     val log: StateFlow<List<String>> = DiagLog.lines
 
-    /** 每次連上後呼叫（用來補送 recordon）。 */
+    /** 每次連上後呼叫（對時、自動備份緊急錄影、接著下載沒下載完的檔案）。 */
     var onConnected: (suspend () -> Unit)? = null
 
     private val lock = Mutex()
@@ -147,7 +149,7 @@ class DashcamConnection(
     }
 
     @Volatile
-    private var disconnectJob: kotlinx.coroutines.Job? = null
+    private var disconnectJob: Job? = null
 
     /** 中斷連線；同官方 App，先通知記錄器 UserDisconnect=ON（記錄器才會恢復一般狀態）。 */
     fun disconnect() {
@@ -157,7 +159,7 @@ class DashcamConnection(
         disconnectJob = scope.launch {
             if (wasConnected) {
                 try {
-                    kotlinx.coroutines.withTimeout(3000) { api.set("UserDisconnect", "ON") }
+                    withTimeout(3000) { api.set("UserDisconnect", "ON") }
                 } catch (e: Exception) {
                     // 記錄器已經離線也沒關係
                 }

@@ -31,6 +31,43 @@ class FileNamesTest {
     }
 
     @Test
+    fun parsesAstroNames() {
+        // 實測：Astro App 存到 Movies/astoramily 的檔名
+        val a = FileNames.parse("20260814081925_002902F.MP4")!!
+        assertEquals(Camera.Front, a.camera)
+        assertEquals("MP4", a.ext)
+        assertEquals(LocalDateTime.of(2026, 8, 14, 8, 19, 25), a.dateTime)
+        assertEquals(a.key, FileNames.parse("20260814081925_002902R.MP4")!!.key)
+
+        // 後鏡頭 = 檔名的 F 改成 R：兩個方向都換得回來，剪輯檔的片段不變
+        assertEquals("20260814081925_002902R.MP4", FileNames.counterpartName("20260814081925_002902F.MP4"))
+        assertEquals("20260814081925_002902F.MP4", FileNames.counterpartName("20260814081925_002902R.MP4"))
+        assertEquals(
+            "20260814081925_002902R_0m10s0-0m15s0.mp4",
+            FileNames.counterpartName("20260814081925_002902F_0m10s0-0m15s0.mp4"),
+        )
+        assertEquals(Camera.Rear, FileNames.cameraOfName("20260814081925_002902R_0m10s0-0m15s0.mp4"))
+        assertNull(FileNames.parse("2026081408_002902F.MP4"))
+    }
+
+    @Test
+    fun parsesOfficialAppNames() {
+        // 實測：官方 App 下載的前鏡頭是 F_P1、後鏡頭是 R_P2
+        val f = FileNames.parse("EMER260909-090223F_P1.mp4")!!
+        assertEquals(Camera.Front, f.camera)
+        assertEquals("MP4", f.ext)
+        assertEquals(LocalDateTime.of(2026, 9, 9, 9, 2, 23), f.dateTime)
+        assertEquals(f.key, FileNames.parse("EMER260909-090223R_P2.mp4")!!.key)
+
+        assertEquals("EMER260909-090223R_P2.mp4", FileNames.counterpartName("EMER260909-090223F_P1.mp4"))
+        assertEquals("EMER260909-090223F_P1.mp4", FileNames.counterpartName("EMER260909-090223R_P2.mp4"))
+        assertEquals(
+            "EMER260909-090223R_P2_0m10s0-0m15s0.mp4",
+            FileNames.counterpartName("EMER260909-090223F_P1_0m10s0-0m15s0.mp4"),
+        )
+    }
+
+    @Test
     fun unknownNameReturnsNull() {
         assertNull(FileNames.parse("readme.txt"))
     }

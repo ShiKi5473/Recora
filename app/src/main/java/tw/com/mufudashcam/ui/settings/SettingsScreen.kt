@@ -3,6 +3,7 @@ package tw.com.mufudashcam.ui.settings
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -19,12 +20,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -43,6 +47,8 @@ import tw.com.mufudashcam.ui.common.ChoiceRow
 import tw.com.mufudashcam.ui.common.Section
 import tw.com.mufudashcam.ui.common.SwitchRow
 import tw.com.mufudashcam.ui.editor.ClipExporter
+import tw.com.mufudashcam.ui.library.LibraryFoldersDialog
+import tw.com.mufudashcam.ui.library.libraryFoldersSummary
 
 /** 修改 App 設定：傳入一個轉換函式。 */
 typealias SettingsUpdate = ((AppSettings) -> AppSettings) -> Unit
@@ -104,6 +110,19 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     subtitle = "縮圖較大，一次看得到比較多（相簿右上也能切換）",
                     checked = settings.libraryGrid,
                 ) { v -> update { it.copy(libraryGrid = v) } }
+                var showFolders by remember { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("相簿資料夾")
+                        Text(
+                            "App 的資料夾以外也讀：${libraryFoldersSummary(settings.libraryFolders)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = { showFolders = true }) { Text("變更") }
+                }
+                if (showFolders) LibraryFoldersDialog(container, onDismiss = { showFolders = false })
             }
 
             Section("播放") {

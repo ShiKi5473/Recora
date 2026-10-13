@@ -73,7 +73,7 @@ class AppContainer(val app: Application) {
     val api = DashcamApi(http, settings)
     val connection = DashcamConnection(app, api, settings, appScope)
     val files = DashcamFiles(api, connection, appScope)
-    val sink = MediaStoreSink(app)
+    val sink = MediaStoreSink(app) { settings.state.value.libraryFolders }
     val downloads = DownloadRepository(
         app, api, sink, http, appScope,
         queueStore = QueueStore(File(app.filesDir, "download_queue.tsv")),

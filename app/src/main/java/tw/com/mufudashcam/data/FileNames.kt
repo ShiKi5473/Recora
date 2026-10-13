@@ -5,6 +5,15 @@ import java.util.Locale
 
 enum class Camera { Front, Rear }
 
+/** 檔案來自哪一種行車記錄器（看檔名格式）。 */
+enum class Brand(val label: String) {
+    Mufu("Mufu"),
+    Astro("Astro"),
+
+    /** 看不出來源，例如改過名的檔案。 */
+    Other("其它"),
+}
+
 /**
  * 下載網址的兩種路徑樣式：Mnt = 列表回傳的完整路徑（/mnt/mmc/Video/F/...），
  * Root = 去掉 /mnt/mmc（/Video/F/...）。實測 V60P 是 Mnt；保留 Root 當備用。
@@ -13,12 +22,19 @@ enum class PathStyle { Mnt, Root }
 
 /** 記錄器檔名與路徑規則（對應 dashcam_download.py 的 to_url / rear_of）。 */
 object FileNames {
-    private val NAME_RE = Regex("""^([A-Za-z]+)(\d{6})-(\d{6})([FR])?\.(\w+)$""", RegexOption.IGNORE_CASE)
+    /** 記錄器檔名；官方 App 下載的會多 `_P1`（前鏡頭）／`_P2`（後鏡頭）：EMER260909-090223F_P1.mp4 */
+    private val NAME_RE = Regex("""^([A-Za-z]+)(\d{6})-(\d{6})([FR])?(?:_P\d)?\.(\w+)$""", RegexOption.IGNORE_CASE)
     private val FRONT_RE = Regex("""/F/([^/]+)F\.(\w+)$""")
     private val REAR_RE = Regex("""/R/([^/]+)R\.(\w+)$""")
 
-    /** 記錄器檔名開頭（前綴＋時間＋鏡頭），後面可以接剪輯片段或截圖位置：FILE260923-131459F_0m10s0-0m15s0.mp4 */
-    private val CAMERA_RE = Regex("""^([A-Za-z]+\d{6}-\d{6})([FR])(.*)$""", RegexOption.IGNORE_CASE)
+    /** Astro 行車記錄器（Astro 的 App 存到手機的）：20260814081925_002902F.MP4 = 年月日時分秒_序號＋鏡頭。 */
+    private val ASTRO_RE = Regex("""^\d{2}(\d{6})(\d{6})_\d+([FR])?\.(\w+)$""", RegexOption.IGNORE_CASE)
+
+    /**
+     * 記錄器檔名開頭（前綴＋時間＋鏡頭；Astro 是時間_序號＋鏡頭），後面可以接剪輯片段或截圖位置：
+     * FILE260923-131459F_0m10s0-0m15s0.mp4
+     */
+    private val CAMERA_RE = Regex("""^([A-Za-z]+\d{6}-\d{6}|\d{14}_\d+)([FR])(.*)$""", RegexOption.IGNORE_CASE)
     private val IMAGE_EXT = setOf("JPG", "JPEG", "PNG")
 
     /** FILE260923-131459F.TS → prefix=FILE, date=260923, time=131459, camera=Front, ext=TS */
@@ -28,6 +44,7 @@ object FileNames {
         val time: String,
         val camera: Camera?,
         val ext: String,
+        val brand: Brand = Brand.Mufu,
     ) {
         /** 前後鏡頭配對用：同一時間點的前後檔案 key 相同。 */
         val key: String get() = "$prefix$date-$time"
@@ -41,15 +58,21 @@ object FileNames {
             }.getOrNull()
     }
 
+    /** 也認得 Astro 的檔名（prefix 為空字串）。 */
     fun parse(name: String): Info? {
-        val m = NAME_RE.matchEntire(name) ?: return null
-        val (prefix, date, time, cam, ext) = m.destructured
-        val camera = when (cam.uppercase()) {
-            "F" -> Camera.Front
-            "R" -> Camera.Rear
-            else -> null
+        NAME_RE.matchEntire(name)?.let { m ->
+            val (prefix, date, time, cam, ext) = m.destructured
+            return Info(prefix.uppercase(), date, time, camera(cam), ext.uppercase())
         }
-        return Info(prefix.uppercase(), date, time, camera, ext.uppercase())
+        val m = ASTRO_RE.matchEntire(name) ?: return null
+        val (date, time, cam, ext) = m.destructured
+        return Info("", date, time, camera(cam), ext.uppercase(), Brand.Astro)
+    }
+
+    private fun camera(letter: String): Camera? = when (letter.uppercase()) {
+        "F" -> Camera.Front
+        "R" -> Camera.Rear
+        else -> null
     }
 
     fun basename(path: String): String = path.substringAfterLast('/')
@@ -85,7 +108,10 @@ object FileNames {
         else -> null
     }
 
-    /** 另一鏡頭的檔名：FILE260923-131459F.TS ↔ FILE260923-131459R.TS（剪輯檔、截圖檔名也適用），看不出鏡頭則回 null。 */
+    /**
+     * 另一鏡頭的檔名：FILE260923-131459F.TS ↔ FILE260923-131459R.TS（剪輯檔、截圖檔名也適用），看不出鏡頭則回 null。
+     * 官方 App 下載的前後鏡頭還差在 `_P1`／`_P2`：EMER260909-090223F_P1.mp4 ↔ EMER260909-090223R_P2.mp4。
+     */
     fun counterpartName(name: String): String? {
         val m = CAMERA_RE.matchEntire(name) ?: return null
         val cam = m.groupValues[2]
@@ -95,7 +121,13 @@ object FileNames {
             "f" -> "r"
             else -> "f"
         }
-        return m.groupValues[1] + other + m.groupValues[3]
+        val rest = m.groupValues[3]
+        val otherRest = when {
+            rest.startsWith("_P1", ignoreCase = true) -> "_P2" + rest.drop(3)
+            rest.startsWith("_P2", ignoreCase = true) -> "_P1" + rest.drop(3)
+            else -> rest
+        }
+        return m.groupValues[1] + other + otherRest
     }
 
     fun httpPath(sdPath: String, style: PathStyle): String = when (style) {

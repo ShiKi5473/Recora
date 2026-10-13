@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -53,6 +54,8 @@ data class AppSettings(
     val startFolder: Folder = Folder.Normal,
     /** 相簿用格狀顯示（否則是列表）。 */
     val libraryGrid: Boolean = false,
+    /** 相簿除了 App 自己的資料夾，還要讀的資料夾（RELATIVE_PATH，結尾有 /，含子資料夾）。 */
+    val libraryFolders: Set<String> = LocalLibrary.DEFAULT_FOLDERS,
     /** 播完自動播錄影時間的下一段。 */
     val autoPlayNext: Boolean = false,
     /** 放大時截圖只存畫面上看得到的範圍（關閉時存整張）。 */
@@ -88,6 +91,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val hostOverride = stringPreferencesKey("host_override")
         val startFolder = stringPreferencesKey("start_folder")
         val libraryGrid = booleanPreferencesKey("library_grid")
+        val libraryFolders = stringSetPreferencesKey("library_folders")
         val autoPlayNext = booleanPreferencesKey("auto_play_next")
         val screenshotVisibleArea = booleanPreferencesKey("screenshot_visible_area")
         val exportCodec = stringPreferencesKey("export_codec")
@@ -119,6 +123,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
             hostOverride = p[Keys.hostOverride] ?: d.hostOverride,
             startFolder = enumOr(p[Keys.startFolder], d.startFolder),
             libraryGrid = p[Keys.libraryGrid] ?: d.libraryGrid,
+            libraryFolders = p[Keys.libraryFolders] ?: d.libraryFolders,
             autoPlayNext = p[Keys.autoPlayNext] ?: d.autoPlayNext,
             screenshotVisibleArea = p[Keys.screenshotVisibleArea] ?: d.screenshotVisibleArea,
             exportCodec = enumOr(p[Keys.exportCodec], d.exportCodec),
@@ -139,6 +144,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         p[Keys.hostOverride] = s.hostOverride
         p[Keys.startFolder] = s.startFolder.name
         p[Keys.libraryGrid] = s.libraryGrid
+        p[Keys.libraryFolders] = s.libraryFolders
         p[Keys.autoPlayNext] = s.autoPlayNext
         p[Keys.screenshotVisibleArea] = s.screenshotVisibleArea
         p[Keys.exportCodec] = s.exportCodec.name

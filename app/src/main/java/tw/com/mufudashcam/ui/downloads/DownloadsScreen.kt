@@ -35,6 +35,7 @@ import tw.com.mufudashcam.AppContainer
 import tw.com.mufudashcam.data.DashcamConfig
 import tw.com.mufudashcam.data.PlayItem
 import tw.com.mufudashcam.download.DownloadTask
+import tw.com.mufudashcam.download.QueueProgress
 import tw.com.mufudashcam.download.TaskStatus
 import tw.com.mufudashcam.ui.Formats
 import tw.com.mufudashcam.ui.common.MessagePane
@@ -51,11 +52,17 @@ fun DownloadsScreen(
     val anyActive = tasks.any { it.isActive }
     val anyFinished = tasks.any { !it.isActive }
     val anyFailed = tasks.any { it.status == TaskStatus.Failed || it.status == TaskStatus.Cancelled }
+    val progress = QueueProgress.of(tasks)
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("下載") },
+                title = {
+                    Column {
+                        Text("下載")
+                        progress?.let { Text(progressText(it), style = MaterialTheme.typography.bodySmall) }
+                    }
+                },
                 actions = {
                     if (anyFailed && !anyActive) TextButton(onClick = repo::retryAllFailed) { Text("重試失敗") }
                     if (anyActive) TextButton(onClick = repo::cancelAll) { Text("全部取消") }
@@ -94,6 +101,17 @@ fun DownloadsScreen(
             }
         }
     }
+}
+
+/** 標題下的整體進度：剩餘 3 個 · 1.20 GB · 約 8 分鐘（沒在下載時不估時間）。 */
+private fun progressText(p: QueueProgress): String = buildString {
+    append("剩餘 ${p.files} 個")
+    if (p.allSizesKnown || p.bytes > 0) {
+        append(" · ")
+        if (!p.allSizesKnown) append("至少 ")
+        append(Formats.size(p.bytes))
+    }
+    p.etaSeconds?.let { append(" · ").append(Formats.eta(it)) }
 }
 
 @Composable

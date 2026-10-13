@@ -11,3 +11,5 @@
 __pycache__/
 /tools/mock_data/
 .kotlin/
+hs_err_pid*.log
+replay_pid*.log

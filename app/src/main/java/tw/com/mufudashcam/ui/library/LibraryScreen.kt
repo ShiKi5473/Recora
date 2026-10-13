@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -92,6 +93,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import tw.com.mufudashcam.AppContainer
+import tw.com.mufudashcam.data.Brand
 import tw.com.mufudashcam.data.Camera
 import tw.com.mufudashcam.data.DashcamConfig
 import tw.com.mufudashcam.data.LocalLibrary
@@ -113,7 +115,7 @@ import java.time.format.DateTimeFormatter
 private val EDIT_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("MM/dd HH:mm")
 
 /**
- * 相簿：只列 Movies/MufuDashcam 與 Pictures/MufuDashcam，分成未剪輯（依拍攝時間）、
+ * 相簿：列 Movies/MufuDashcam、Pictures/MufuDashcam 與「相簿資料夾」勾選的資料夾（預設含 Astro App 的 Movies/astoramily），分成未剪輯（依拍攝時間）、
  * 已剪輯（依剪輯時間）、照片，最新的在最上面並依日期分組；可切換列表／格狀。
  * 長按進入多選，可整批刪除或分享。
  */
@@ -135,6 +137,7 @@ fun LibraryScreen(
     var viewingPhoto by remember { mutableStateOf<LocalMedia?>(null) }
     var pendingDelete by remember { mutableStateOf<List<LocalMedia>?>(null) }
     var showCleanup by remember { mutableStateOf(false) }
+    var showFolders by remember { mutableStateOf(false) }
     var confirmClearLeftovers by remember { mutableStateOf(false) }
     val selectionMode = ui.selection.isNotEmpty()
 
@@ -147,7 +150,8 @@ fun LibraryScreen(
         vm.refresh()
     }
     val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
-        vm.refresh()
+        // 相簿會收到並重新整理，「檔案」頁的已下載打勾也跟著更新
+        container.libraryChanged.tryEmit(Unit)
     }
     LaunchedEffect(Unit) {
         if (!hasFullAccess) {
@@ -177,7 +181,10 @@ fun LibraryScreen(
         topBar = {
             if (selectionMode) {
                 TopAppBar(
-                    title = { Text("已選 ${ui.selection.size} 個") },
+                    title = {
+                        val selected = ui.selectedItems
+                        Text("已選 ${selected.size} 個 · ${Formats.size(selected.sumOf { it.sizeBytes })}")
+                    },
                     navigationIcon = {
                         IconButton(onClick = vm::clearSelection) { Icon(Icons.Filled.Close, contentDescription = "取消選取") }
                     },
@@ -220,6 +227,14 @@ fun LibraryScreen(
                             IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "更多") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                 DropdownMenuItem(
+                                    text = { Text("相簿資料夾…") },
+                                    leadingIcon = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                                    onClick = {
+                                        menu = false
+                                        showFolders = true
+                                    },
+                                )
+                                DropdownMenuItem(
                                     text = { Text("整理空間…") },
                                     leadingIcon = { Icon(Icons.Filled.CleaningServices, contentDescription = null) },
                                     onClick = {
@@ -245,9 +260,21 @@ fun LibraryScreen(
                     )
                 }
             }
-            // 鏡頭篩選（左右滑動切換也只在篩選後的清單裡）
+            // 記錄器種類、鏡頭篩選（左右滑動切換也只在篩選後的清單裡）
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                (listOf(null) + Brand.entries).forEach { brand ->
+                    FilterChip(
+                        selected = ui.brandFilter == brand,
+                        onClick = { vm.setBrandFilter(brand) },
+                        label = { Text(brand?.label ?: "全部") },
+                    )
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 listOf(null to "全部", Camera.Front to "前鏡頭", Camera.Rear to "後鏡頭").forEach { (cam, label) ->
@@ -334,6 +361,7 @@ fun LibraryScreen(
             onDismiss = { viewingPhoto = null },
         )
     }
+    if (showFolders) LibraryFoldersDialog(container, onDismiss = { showFolders = false })
     if (showCleanup) {
         CleanupDialog(
             items = ui.items,
@@ -406,7 +434,7 @@ private fun CleanupDialog(
                     Text("${kind.label}：${list.size} 個 · ${Formats.size(list.sumOf { it.sizeBytes })}")
                 }
                 HorizontalDivider()
-                CleanupRow("已剪輯過的原始檔", "匯出剪輯後，原始的 TS 通常就用不到了", edited.size, edited.sumOf { it.sizeBytes }) {
+                CleanupRow("已剪輯過的原始檔", "匯出剪輯後，原始檔通常就用不到了", edited.size, edited.sumOf { it.sizeBytes }) {
                     onDelete(edited)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -414,7 +442,7 @@ private fun CleanupDialog(
                         FilterChip(selected = days == d, onClick = { days = d }, label = { Text("$d 天") })
                     }
                 }
-                CleanupRow("$days 天前錄的原始檔", null, old.size, old.sumOf { it.sizeBytes }) { onDelete(old) }
+                CleanupRow("$days 天前錄的原始檔", "只算檔名看得出是記錄器錄的", old.size, old.sumOf { it.sizeBytes }) { onDelete(old) }
                 CleanupRow(
                     "未完成的下載暫存檔",
                     "取消或中斷的下載留下的檔案（下載佇列裡還在等的不算）",

@@ -8,19 +8,23 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.com.mufudashcam.AppContainer
+import tw.com.mufudashcam.data.Brand
 import tw.com.mufudashcam.data.Camera
 import tw.com.mufudashcam.data.LocalLibrary
 import tw.com.mufudashcam.data.LocalMedia
@@ -33,6 +37,8 @@ data class LibraryUi(
     val items: List<LocalMedia> = emptyList(),
     val tab: MediaKind = MediaKind.Original,
     val loading: Boolean = false,
+    /** 記錄器種類篩選：null = 全部。 */
+    val brandFilter: Brand? = null,
     /** 鏡頭篩選：null = 全部。 */
     val cameraFilter: Camera? = null,
     /** 多選中的檔案（uri）；非空 = 選取模式。 */
@@ -40,12 +46,18 @@ data class LibraryUi(
     /** 「整理空間」用：沒下載完、也不在下載佇列裡的暫存檔；null = 還沒讀。 */
     val leftovers: List<MediaStoreSink.Entry>? = null,
 ) {
+    /** 各類套用篩選後的清單：分頁標籤、清單、選取都會用到，每個狀態只算一次（順序同 [items]）。 */
+    private val byKind: Map<MediaKind, List<LocalMedia>> by lazy {
+        items.filter {
+            (brandFilter == null || it.brand == brandFilter) && (cameraFilter == null || it.camera == cameraFilter)
+        }.groupBy { it.kind }
+    }
+
     /** 目前分頁、篩選後被選取的檔案。 */
     val selectedItems: List<LocalMedia> get() = of(tab).filter { it.uri in selection }
 
-    /** 某一類、套用鏡頭篩選後的清單。 */
-    fun of(kind: MediaKind): List<LocalMedia> =
-        items.filter { it.kind == kind && (cameraFilter == null || it.camera == cameraFilter) }
+    /** 某一類、套用記錄器種類與鏡頭篩選後的清單。 */
+    fun of(kind: MediaKind): List<LocalMedia> = byKind[kind].orEmpty()
 }
 
 class LibraryViewModel(private val c: AppContainer) : ViewModel() {
@@ -59,8 +71,14 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     private val _deleteRequests = Channel<IntentSender>(Channel.BUFFERED)
     val deleteRequests: Flow<IntentSender> = _deleteRequests.receiveAsFlow()
 
+    private var refreshJob: Job? = null
+
     init {
         viewModelScope.launch { c.libraryChanged.collect { refresh() } }
+        // 「相簿資料夾」改了
+        viewModelScope.launch {
+            c.settings.state.map { it.libraryFolders }.distinctUntilChanged().drop(1).collect { refresh() }
+        }
         viewModelScope.launch {
             c.downloads.tasks.map { tasks -> tasks.count { it.status == TaskStatus.Done } }
                 .distinctUntilChanged()
@@ -77,6 +95,8 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
 
     fun selectTab(kind: MediaKind) = _ui.update { it.copy(tab = kind, selection = emptySet()) }
 
+    fun setBrandFilter(brand: Brand?) = _ui.update { it.copy(brandFilter = brand, selection = emptySet()) }
+
     fun setCameraFilter(camera: Camera?) = _ui.update { it.copy(cameraFilter = camera, selection = emptySet()) }
 
     fun toggle(uri: String) = _ui.update {
@@ -90,15 +110,21 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     /** 頭尾之間全選（依畫面順序）。 */
     fun selectRange(orderedUris: List<String>) = _ui.update { it.copy(selection = DateGroups.selectRange(orderedUris, it.selection)) }
 
+    /** 重讀相簿。回到畫面、下載完成、相簿內容變了常常連續觸發：只留最後一次，舊的結果不會蓋掉新的。 */
     fun refresh() {
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             _ui.update { it.copy(loading = true) }
-            val items = withContext(Dispatchers.IO) {
-                runCatching { LocalLibrary.sorted(c.sink.listLibrary()) }.getOrDefault(emptyList())
+            try {
+                val items = withContext(Dispatchers.IO) {
+                    runCatching { LocalLibrary.sorted(c.sink.listLibrary()) }.getOrDefault(emptyList())
+                }
+                // 已經不在相簿裡的檔案（例如被刪掉）從選取中移除
+                val present = items.mapTo(HashSet()) { it.uri }
+                _ui.update { u -> u.copy(items = items, selection = u.selection.filterTo(HashSet()) { it in present }) }
+            } finally {
+                if (refreshJob === coroutineContext.job) _ui.update { it.copy(loading = false) }
             }
-            // 已經不在相簿裡的檔案（例如被刪掉）從選取中移除
-            val present = items.mapTo(HashSet()) { it.uri }
-            _ui.update { u -> u.copy(items = items, loading = false, selection = u.selection.filterTo(HashSet()) { it in present }) }
         }
     }
 
@@ -145,7 +171,8 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
             clearSelection()
             if (deleted > 0) {
                 _messages.trySend(if (items.size == 1) "已刪除 ${items[0].name}" else "已刪除 $deleted 個檔案")
-                refresh()
+                // 相簿自己會收到並重新整理；「檔案」頁的已下載打勾也要跟著更新
+                c.libraryChanged.tryEmit(Unit)
             }
             if (needConfirm.isNotEmpty()) {
                 val request = MediaStore.createDeleteRequest(c.app.contentResolver, needConfirm)

@@ -1,6 +1,7 @@
 package tw.com.mufudashcam.ui
 
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -22,11 +23,19 @@ object Formats {
     fun progress(bytes: Long, total: Long): String =
         if (total > 0) "${size(bytes)} / ${size(total)}" else size(bytes)
 
-    fun time(t: java.time.LocalDateTime?): String = t?.format(TIME) ?: "--:--:--"
+    fun time(t: LocalDateTime?): String = t?.format(TIME) ?: "--:--:--"
 
     fun date(d: LocalDate?): String = d?.format(DATE) ?: "日期不明"
 
-    fun dateTime(t: java.time.LocalDateTime): String = t.format(DATE_TIME)
+    fun dateTime(t: LocalDateTime): String = t.format(DATE_TIME)
+
+    /** 預估剩餘時間：不到 1 分鐘、約 5 分鐘、約 1 小時 5 分。 */
+    fun eta(seconds: Long): String {
+        if (seconds < 60) return "不到 1 分鐘"
+        val minutes = (seconds + 59) / 60
+        if (minutes < 60) return "約 $minutes 分鐘"
+        return "約 ${minutes / 60} 小時" + if (minutes % 60 > 0) " ${minutes % 60} 分" else ""
+    }
 
     /** 影片長度 / 片段位置：1:05 或 0:10.5 */
     fun duration(ms: Long, tenths: Boolean = false): String {

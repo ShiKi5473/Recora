@@ -64,7 +64,7 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Android 15+ 的 dataSync 時間上限到了：取消佇列（會觸發 recordon 收尾）並停止。 */
+    /** Android 15+ 的 dataSync 時間上限到了：取消佇列並停止（已下載的部分保留，再次下載會從中斷處續傳）。 */
     override fun onTimeout(startId: Int, fgsType: Int) {
         repo.cancelAll()
         finish()

@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -102,7 +103,7 @@ private fun LivePlayer(
     val scope = rememberCoroutineScope()
     var camera by rememberSaveable { mutableStateOf(Camera.Front) }
     var status by remember { mutableStateOf("連線中…") }
-    var generation by remember { mutableStateOf(0) }
+    var generation by remember { mutableIntStateOf(0) }
     var url by remember { mutableStateOf("") }
     val player = remember { ExoPlayer.Builder(context).build() }
 
