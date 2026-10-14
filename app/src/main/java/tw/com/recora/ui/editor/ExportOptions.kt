@@ -53,6 +53,13 @@ object ExportOptions {
         ((videoBitrate * factor.toDouble() + audioBitrate) * durationMs.coerceAtLeast(0) / 8_000.0 * CONTAINER_OVERHEAD).roundToLong()
 
     /**
+     * 不重新編碼時的預估：範圍內來源樣本的實際大小（見 [SourceRangeBytes]）加上 MP4 容器負擔；
+     * 去除聲音時不算聲音。量的就是會被複製的資料，不需要倍數校正。
+     */
+    fun estimatedCopyBytes(videoBytes: Long, audioBytes: Long, removeAudio: Boolean): Long =
+        ((videoBytes + if (removeAudio) 0L else audioBytes) * CONTAINER_OVERHEAD).roundToLong()
+
+    /**
      * 從一次匯出的結果算出編碼器實際輸出／要求的影像位元率。編碼器常常超出要求，超出多少依設定而不同
      * （見 [factorKey]），只靠公式會低估。太短的片段誤差大，不採用（回 null）。
      */

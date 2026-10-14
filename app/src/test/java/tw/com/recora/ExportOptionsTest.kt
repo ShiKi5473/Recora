@@ -109,6 +109,13 @@ class ExportOptionsTest {
     }
 
     @Test
+    fun copyEstimateUsesMeasuredSourceBytes() {
+        // 不重新編碼：範圍內來源樣本的大小 + 約 1% 的 MP4 容器負擔；去除聲音時不算聲音
+        assertEquals(25_250_000L, ExportOptions.estimatedCopyBytes(24_800_000, 200_000, removeAudio = false))
+        assertEquals(25_048_000L, ExportOptions.estimatedCopyBytes(24_800_000, 200_000, removeAudio = true))
+    }
+
+    @Test
     fun factorsWithoutContainerBecomeTs() {
         // 還沒分來源容器時只匯出過 Mufu 的 TS
         assertEquals(

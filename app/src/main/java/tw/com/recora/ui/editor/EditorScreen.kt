@@ -144,6 +144,7 @@ fun EditorScreen(
     // 播放器讀到（或換了）影音軌時加一，預估檔案大小跟著重算
     var formatVersion by remember { mutableIntStateOf(0) }
     var sourceBitrate by remember { mutableStateOf<Int?>(null) }
+    var rangeBytes by remember { mutableStateOf<SourceRangeBytes.Bytes?>(null) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -216,6 +217,17 @@ fun EditorScreen(
 
     val startMs = range.start.roundToLong()
     val endMs = range.endInclusive.roundToLong()
+    // 不重新編碼時：量選取範圍內來源的實際資料量（拖曳範圍時等停下來才量；量好之前用整支檔案的平均估）
+    val copyMode = effectiveCodec(settings.exportCodec) == ExportCodec.Original
+    LaunchedEffect(copyMode, segments, startMs, endMs) {
+        rangeBytes = null
+        if (!copyMode || endMs <= startMs) return@LaunchedEffect
+        delay(RANGE_MEASURE_DELAY_MS)
+        val parts = EditPlan.pieces(segments.map { it.durationMs }, startMs, endMs).map { p ->
+            SourceRangeBytes.measure(context, segments[p.segment].uri, p.startMs, p.endMs) ?: return@LaunchedEffect
+        }
+        rangeBytes = SourceRangeBytes.Bytes(parts.sumOf { it.video }, parts.sumOf { it.audio })
+    }
     val exporting = exportProgress != null
     // 跨段剪輯只用在記錄器的原始檔（看得出錄影時間）
     val canJoin = FileNames.parse(segments.first().title)?.dateTime != null
@@ -348,6 +360,10 @@ fun EditorScreen(
     /** 預估匯出一支的檔案大小（目前的範圍與匯出設定），用之前匯出學到的編碼器倍數校正。 */
     fun estimatedBytes(s: AppSettings): Long {
         val spec = outputSpec(s)
+        val measured = rangeBytes
+        if (spec.codec == ExportCodec.Original && measured != null) {
+            return ExportOptions.estimatedCopyBytes(measured.video, measured.audio, removeAudio)
+        }
         val factor = ExportOptions.lookupFactor(s.exportBitrateFactors, factorKey(s, spec))
         return ExportOptions.estimatedBytes(endMs - startMs, videoBitrate(s, spec), audioBitrate(), factor ?: 1f)
     }
@@ -395,7 +411,7 @@ fun EditorScreen(
                                 "RecoraExport",
                                 "name=$name codec=${spec.codec} size=${spec.width}x${spec.height} " +
                                     "quality=${container.settings.state.value.exportQuality} mute=$removeAudio segments=${segments.size} " +
-                                    "clipMs=$clipMs estimate=$estimate actual=${file.length()} videoBps=$requestedVideoBps " +
+                                    "clipMs=$clipMs estimate=$estimate rangeMeasured=${rangeBytes != null} actual=${file.length()} videoBps=$requestedVideoBps " +
                                     "audioBps=$audioBps factorKey=$factorKey factorBefore=${container.settings.state.value.exportBitrateFactors[factorKey]} " +
                                     "measured=$measuredFactor tookMs=${SystemClock.elapsedRealtime() - startedAt}",
                             )
@@ -510,7 +526,7 @@ fun EditorScreen(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (totalMs > 0) {
-                    val estimate = remember(formatVersion, sourceBitrate, startMs, endMs, removeAudio, settings) { estimatedBytes(settings) }
+                    val estimate = remember(formatVersion, sourceBitrate, rangeBytes, startMs, endMs, removeAudio, settings) { estimatedBytes(settings) }
                     val another = alsoOtherCamera && counterpartUris != null
                     Text(
                         "預估檔案大小 約 ${Formats.size(estimate)}" +
@@ -681,6 +697,9 @@ fun EditorScreen(
 private data class OutputSpec(val width: Int, val height: Int, val scaledHeight: Int?, val fps: Float, val codec: ExportCodec)
 
 private const val MIN_CLIP_MS = 500L
+
+/** 不重新編碼時，範圍停下來多久才量來源的資料量（TS 要掃檔，拖曳中不量）。 */
+private const val RANGE_MEASURE_DELAY_MS = 500L
 
 /** 拖曳範圍時，預覽 seek 的最小間隔。 */
 private const val SCRUB_SEEK_INTERVAL_MS = 150L

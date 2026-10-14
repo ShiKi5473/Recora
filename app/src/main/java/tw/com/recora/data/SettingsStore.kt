@@ -76,7 +76,7 @@ data class AppSettings(
     /**
      * 這支手機的編碼器實際輸出／要求的影像位元率，從匯出結果學來，預估檔案大小用。
      * 依匯出設定分開記（key 見 [tw.com.recora.ui.editor.ExportOptions.factorKey]）：
-     * 實測同一個 H.264 編碼器，/** 還沒分來源容器的倍數（`H264|1440|Standard`、`Original`）：當時都是 Mufu 的 TS，補上 `|TS`。 */p 標準多出 24%，1080p 省空間卻多出 90%。
+     * 實測同一個 H.264 編碼器，1440p 標準多出 24%，1080p 省空間卻多出 90%。
      */
     val exportBitrateFactors: Map<String, Float> = emptyMap(),
     val themeMode: ThemeMode = ThemeMode.System,
