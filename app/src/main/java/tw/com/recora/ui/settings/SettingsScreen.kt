@@ -41,6 +41,7 @@ import tw.com.recora.data.ExportCodec
 import tw.com.recora.data.ExportQuality
 import tw.com.recora.data.ExportResolution
 import tw.com.recora.data.Folder
+import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.SubfolderMode
 import tw.com.recora.data.ThemeMode
 import tw.com.recora.ui.common.ChoiceRow
@@ -92,8 +93,9 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     selected = settings.downloadSubfolder,
                     optionLabel = { it.label },
                     onSelect = { m -> update { it.copy(downloadSubfolder = m) } },
-                    hint = "在 Movies／Pictures 的 ${DashcamConfig.LOCAL_DIR} 底下再分子資料夾，系統相簿裡比較好找；只影響之後的下載",
+                    hint = "在 Movies／Pictures 的 ${settings.albumDir} 底下再分子資料夾，系統相簿裡比較好找；只影響之後的下載",
                 )
+                AlbumDirField(settings.albumDir) { dir -> update { it.copy(albumDir = dir) } }
             }
 
             Section("瀏覽") {
@@ -180,22 +182,29 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
 @Composable
 fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMuteDefault: Boolean = true) {
     val hevc = ClipExporter.hevcEncoderAvailable
+    val codec = if (settings.exportCodec == ExportCodec.H265 && !hevc) ExportCodec.H264 else settings.exportCodec
+    val reencode = codec != ExportCodec.Original
     ChoiceRow(
         title = "編碼",
         options = ExportCodec.entries,
-        selected = if (hevc) settings.exportCodec else ExportCodec.H264,
+        selected = codec,
         optionLabel = { it.label },
         onSelect = { c -> update { it.copy(exportCodec = c) } },
-        hint = if (hevc) "H.264 相容性最好；H.265 檔案較小，但有些裝置或網站播不了" else "這支手機沒有 H.265 編碼器，只能用 H.264",
+        hint = when {
+            !reencode -> "直接複製記錄器的 H.265 畫面：畫質、檔案大小都跟原檔一樣，匯出很快；有些裝置或網站播不了 H.265"
+            hevc -> "H.264 相容性最好；H.265 檔案較小，但有些裝置或網站播不了；「不重新編碼」畫質最好、最快"
+            else -> "這支手機沒有 H.265 編碼器，重新編碼只能用 H.264；「不重新編碼」畫質最好、最快"
+        },
         optionEnabled = { it != ExportCodec.H265 || hevc },
     )
     ChoiceRow(
         title = "解析度",
         options = ExportResolution.entries,
-        selected = settings.exportResolution,
+        selected = if (reencode) settings.exportResolution else ExportResolution.Original,
         optionLabel = { it.label },
         onSelect = { r -> update { it.copy(exportResolution = r) } },
-        hint = "只會縮小、不會放大；解析度越低轉檔越快",
+        hint = if (reencode) "只會縮小、不會放大；解析度越低轉檔越快" else "不重新編碼時跟原檔一樣",
+        enabled = reencode,
     )
     ChoiceRow(
         title = "畫質",
@@ -203,7 +212,9 @@ fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMute
         selected = settings.exportQuality,
         optionLabel = { it.label },
         onSelect = { q -> update { it.copy(exportQuality = q) } },
-        hint = "「省空間」適合用通訊軟體分享",
+        hint = if (reencode) "「省空間」適合用通訊軟體分享" else "不重新編碼時跟原檔一樣",
+        enabled = reencode,
+        selectedLabel = if (reencode) settings.exportQuality.label else "同原檔",
     )
     if (showMuteDefault) {
         SwitchRow(
@@ -211,6 +222,38 @@ fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMute
             subtitle = "剪輯時「去除聲音」預設打開，車內的對話不會跟著分享出去",
             checked = settings.exportMute,
         ) { v -> update { it.copy(exportMute = v) } }
+    }
+}
+
+/** 存檔資料夾：下載、匯出、截圖存到 Movies／Pictures 底下的哪個資料夾。 */
+@Composable
+private fun AlbumDirField(albumDir: String, onSave: (String) -> Unit) {
+    var name by rememberSaveable(albumDir) { mutableStateOf(albumDir) }
+    val trimmed = name.trim()
+    val valid = LocalLibrary.isValidAlbumDir(trimmed)
+    Text("存檔資料夾")
+    Text(
+        "下載的影片、剪輯匯出的 MP4 存到 Movies/$albumDir，照片與截圖存到 Pictures/$albumDir。" +
+            "只影響之後存的檔案；原本資料夾裡的檔案不會搬，相簿照樣讀得到。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedTextField(
+        value = name,
+        onValueChange = { name = it },
+        label = { Text("資料夾名稱") },
+        singleLine = true,
+        isError = !valid,
+        supportingText = if (valid) null else {
+            { Text("只能是一層資料夾名稱，不能空白、不能以 . 開頭，也不能有 / \\ : * ? \" < > |") }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { onSave(trimmed) }, enabled = valid && trimmed != albumDir) { Text("儲存") }
+        if (albumDir != DashcamConfig.LOCAL_DIR) {
+            TextButton(onClick = { onSave(DashcamConfig.LOCAL_DIR) }) { Text("改回 ${DashcamConfig.LOCAL_DIR}") }
+        }
     }
 }
 

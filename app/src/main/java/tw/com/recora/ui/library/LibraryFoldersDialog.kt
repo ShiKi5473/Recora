@@ -44,6 +44,7 @@ import tw.com.recora.download.MediaStoreSink
 @Composable
 fun LibraryFoldersDialog(container: AppContainer, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val albumDir = remember { container.settings.state.value.albumDir }
     val initial = remember { container.settings.state.value.libraryFolders }
     var selected by remember { mutableStateOf(initial) }
     val found by produceState<List<MediaStoreSink.MediaFolder>?>(null) {
@@ -64,7 +65,7 @@ fun LibraryFoldersDialog(container: AppContainer, onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "一定會讀 Movies/${DashcamConfig.LOCAL_DIR} 與 Pictures/${DashcamConfig.LOCAL_DIR}（下載與匯出都存在那裡，改版前的 ${DashcamConfig.LEGACY_LOCAL_DIRS.joinToString("、")} 也一樣）。" +
+                    "一定會讀 Movies/$albumDir 與 Pictures/$albumDir（下載與匯出都存在那裡；預設的 ${DashcamConfig.LOCAL_DIR}、改版前的 ${DashcamConfig.LEGACY_LOCAL_DIRS.joinToString("、")} 也一樣）。" +
                         "另外勾選要一起顯示的資料夾（含子資料夾），檔案依檔名分到未剪輯／已剪輯／照片。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -81,7 +82,7 @@ fun LibraryFoldersDialog(container: AppContainer, onDismiss: () -> Unit) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 } else {
                     val rows = remember(list) {
-                        val counts = list.filter { !LocalLibrary.isAppFolder(it.path) }.associate { it.path to it.count }
+                        val counts = list.filter { !LocalLibrary.isAppFolder(it.path, albumDir) }.associate { it.path to it.count }
                         (counts.keys + initial).distinct()
                             .sortedWith(
                                 compareByDescending<String> { it in initial }

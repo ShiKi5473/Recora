@@ -32,7 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tw.com.recora.AppContainer
-import tw.com.recora.data.DashcamConfig
 import tw.com.recora.data.PlayItem
 import tw.com.recora.download.DownloadTask
 import tw.com.recora.download.QueueProgress
@@ -47,6 +46,7 @@ fun DownloadsScreen(
     onPlay: (url: String, title: String) -> Unit,
     onEdit: (uri: String, title: String) -> Unit,
 ) {
+    val settings by container.settings.state.collectAsStateWithLifecycle()
     val repo = container.downloads
     val tasks by repo.tasks.collectAsStateWithLifecycle()
     val anyActive = tasks.any { it.isActive }
@@ -76,7 +76,7 @@ fun DownloadsScreen(
                 icon = Icons.Filled.Download,
                 title = "沒有下載項目",
                 text = "在「檔案」頁長按選取影片後下載。\n" +
-                    "影片存到 Movies/${DashcamConfig.LOCAL_DIR}，照片存到 Pictures/${DashcamConfig.LOCAL_DIR}。",
+                    "影片存到 Movies/${settings.albumDir}，照片存到 Pictures/${settings.albumDir}。",
                 modifier = Modifier.padding(pad),
             )
         } else {

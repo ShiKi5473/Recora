@@ -305,6 +305,30 @@ class LocalLibraryTest {
     }
 
     @Test
+    fun customAlbumDirComesFirstAndKeepsOldFolders() {
+        assertEquals(
+            listOf("Movies/行車紀錄/", "Movies/Recora/", "Movies/Dashcam/", "Movies/MufuDashcam/"),
+            LocalLibrary.appDirs(false, "行車紀錄"),
+        )
+        // 改回大小寫不同的預設名稱不會重複
+        assertEquals(listOf("Pictures/recora/", "Pictures/Dashcam/", "Pictures/MufuDashcam/"), LocalLibrary.appDirs(true, "recora"))
+        val m = LocalLibrary.build(
+            "content://x/v", "my-clip.mp4", "Movies/行車紀錄/", 1, 1000, 0, null, zone, folders = emptySet(), albumDir = "行車紀錄",
+        )
+        assertEquals(MediaKind.Edited, m!!.kind)
+        assertNull(LocalLibrary.build("content://x/v", "my-clip.mp4", "Movies/行車紀錄/", 1, 1000, 0, null, zone, folders = emptySet()))
+        assertEquals(setOf("Movies/astoramily/"), LocalLibrary.extraFolders(setOf("Movies/astoramily/", "Movies/行車紀錄/"), "行車紀錄"))
+    }
+
+    @Test
+    fun albumDirValidation() {
+        assertTrue(LocalLibrary.isValidAlbumDir("Recora"))
+        assertTrue(LocalLibrary.isValidAlbumDir("行車 紀錄"))
+        listOf("", " Recora", "Recora ", ".hidden", "a/b", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b", "a|b", "x".repeat(65))
+            .forEach { assertFalse(it, LocalLibrary.isValidAlbumDir(it)) }
+    }
+
+    @Test
     fun extraFoldersDropsAppFolders() {
         val saved = setOf("Movies/astoramily/", "Movies/MufuDashcam/", "Pictures/Dashcam/緊急/", "Movies/Recora/")
         assertEquals(setOf("Movies/astoramily/"), LocalLibrary.extraFolders(saved))

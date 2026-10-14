@@ -95,7 +95,6 @@ import kotlinx.coroutines.launch
 import tw.com.recora.AppContainer
 import tw.com.recora.data.Brand
 import tw.com.recora.data.Camera
-import tw.com.recora.data.DashcamConfig
 import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.LocalMedia
 import tw.com.recora.data.MediaKind
@@ -311,9 +310,9 @@ fun LibraryScreen(
                         MediaKind.Photo -> "沒有照片"
                     },
                     text = when (ui.tab) {
-                        MediaKind.Original -> "到「檔案」頁選取影片下載，會存到 Movies/${DashcamConfig.LOCAL_DIR}"
+                        MediaKind.Original -> "到「檔案」頁選取影片下載，會存到 Movies/${settings.albumDir}"
                         MediaKind.Edited -> "在「未剪輯」選一段影片按「剪輯」，匯出的 MP4 會出現在這裡"
-                        MediaKind.Photo -> "記錄器的照片與剪輯時的截圖會存到 Pictures/${DashcamConfig.LOCAL_DIR}"
+                        MediaKind.Photo -> "記錄器的照片與剪輯時的截圖會存到 Pictures/${settings.albumDir}"
                     },
                 )
             } else {

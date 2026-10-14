@@ -1,6 +1,7 @@
 package tw.com.recora.ui.editor
 
 import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.OptIn
@@ -35,18 +36,21 @@ data class ExportPiece(val uri: String, val startMs: Long? = null, val endMs: Lo
 
 /**
  * 一次匯出：[pieces] 依序接成一支影片，每段可以各自剪頭尾。
+ * [videoMimeType] = null 不重新編碼（直接複製原本的畫面與聲音，[outputHeight]、[bitrate] 不使用）；
  * [outputHeight] = null 維持原始解析度；[bitrate] = null 用編碼器預設的位元率。
  */
 data class ExportRequest(
     val pieces: List<ExportPiece>,
     val removeAudio: Boolean,
-    val videoMimeType: String = MimeTypes.VIDEO_H264,
+    val videoMimeType: String? = MimeTypes.VIDEO_H264,
     val outputHeight: Int? = null,
     val bitrate: Int? = null,
-)
+) {
+    val transmux: Boolean get() = videoMimeType == null
+}
 
 /**
- * 用 Media3 Transformer 把（TS）影片剪一段、轉成 MP4，可去除聲音。
+ * 用 Media3 Transformer 把（TS）影片剪一段、轉成 MP4，可去除聲音；可以重新編碼，也可以直接複製原本的畫面（不重新編碼）。
  * 記錄器的 TS 內有 H.265 主串流與 H.264 子串流，Transformer 預設的軌道選擇會選畫質最好的那一軌。
  * 讀檔用與播放器相同的 TS 設定（[dashcamMediaSourceFactory]），否則起點不在 0 秒的剪輯會失敗。
  */
@@ -66,7 +70,21 @@ class ClipExporter(private val context: Context, http: OkHttpClient) {
      * 協程被取消或匯出失敗時，暫存檔一併刪除（Transformer.cancel() 本身不會刪）。必須在主執行緒呼叫。
      */
     suspend fun export(request: ExportRequest, onProgress: (Int) -> Unit): File {
-        val output = File(context.cacheDir, "$TEMP_PREFIX${System.currentTimeMillis()}.mp4")
+        val first = request.pieces.first()
+        if (!request.transmux || request.pieces.size == 1 || (first.startMs ?: 0L) == 0L) return exportOnce(request, onProgress)
+        // 不重新編碼又跨段、第一段剪了頭：Media3 只有單一來源才能用 edit list 剪頭，多段時起點不在關鍵影格就會改成重新編碼。
+        // 所以先把第一段單獨匯出（edit list 剪頭），再跟後面幾段（都從 0 秒開始）接起來；兩次都只是複製，很快
+        val head = exportOnce(request.copy(pieces = listOf(first))) { p -> onProgress(p / 3) }
+        try {
+            val rest = request.copy(pieces = listOf(ExportPiece(Uri.fromFile(head).toString())) + request.pieces.drop(1))
+            return exportOnce(rest) { p -> onProgress(33 + p * 2 / 3) }
+        } finally {
+            head.delete()
+        }
+    }
+
+    private suspend fun exportOnce(request: ExportRequest, onProgress: (Int) -> Unit): File {
+        val output = File(context.cacheDir, "$TEMP_PREFIX${System.nanoTime()}.mp4")
         val items = request.pieces.map { piece ->
             EditedMediaItem.Builder(mediaItem(piece)).setRemoveAudio(request.removeAudio).build()
         }
@@ -75,7 +93,13 @@ class ClipExporter(private val context: Context, http: OkHttpClient) {
         val sequence = EditedMediaItemSequence.Builder(items).build()
         val composition = Composition.Builder(sequence)
             .apply {
-                request.outputHeight?.let { setEffects(Effects(emptyList(), listOf(Presentation.createForHeight(it)))) }
+                if (request.transmux) {
+                    // 跨段時有好幾段來源，不明講的話 Transformer 一律重新編碼
+                    setTransmuxVideo(true)
+                    setTransmuxAudio(true)
+                } else {
+                    request.outputHeight?.let { setEffects(Effects(emptyList(), listOf(Presentation.createForHeight(it)))) }
+                }
             }
             .build()
         return suspendCancellableCoroutine { cont ->
@@ -83,9 +107,16 @@ class ClipExporter(private val context: Context, http: OkHttpClient) {
             lateinit var poll: Runnable
             val transformer = Transformer.Builder(context)
                 .setAssetLoaderFactory(assetLoaders)
-                .setVideoMimeType(request.videoMimeType)
                 .apply {
-                    request.bitrate?.let { bps ->
+                    val mime = request.videoMimeType
+                    if (mime != null) {
+                        setVideoMimeType(mime)
+                    } else {
+                        // 起點不在關鍵影格時，Transformer 預設會改成重新編碼；開這個改成從前一個關鍵影格開始複製，
+                        // 再用 MP4 的 edit list 標出真正的起點，播放時仍然從選的那一格開始（記錄器約每秒一個關鍵影格）
+                        experimentalSetMp4EditListTrimEnabled(true)
+                    }
+                    request.bitrate?.takeIf { !request.transmux }?.let { bps ->
                         setEncoderFactory(
                             DefaultEncoderFactory.Builder(context)
                                 .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bps).build())

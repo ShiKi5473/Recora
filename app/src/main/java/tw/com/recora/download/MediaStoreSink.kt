@@ -18,7 +18,8 @@ import java.io.IOException
 import java.io.OutputStream
 
 /**
- * 把下載寫進相簿（MediaStore），影片放 Movies/Recora、照片放 Pictures/Recora（可再分子資料夾；相容舊版的 Dashcam、MufuDashcam）。
+ * 把下載寫進相簿（MediaStore），影片放 Movies/<存檔資料夾>、照片放 Pictures/<存檔資料夾>（預設 Recora，「App 設定」可改；
+ * 可再分子資料夾）。改過存檔資料夾或舊版的 Dashcam、MufuDashcam 裡的檔案照樣讀得到。
  * 下載中的檔案標為 IS_PENDING，未完成的 pending 檔案就是續傳的依據，不需要另外的資料庫。
  * 找檔案時包含子資料夾，換過「下載資料夾分類」設定也找得到以前下載的。
  */
@@ -26,6 +27,8 @@ class MediaStoreSink(
     context: Context,
     /** 相簿除了 App 自己的資料夾還要讀的資料夾（「App 設定」裡勾選的）。 */
     private val libraryFolders: () -> Collection<String> = { LocalLibrary.DEFAULT_FOLDERS },
+    /** 下載、匯出、截圖存到的資料夾名稱（「App 設定」的存檔資料夾）。 */
+    private val albumDir: () -> String = { DashcamConfig.LOCAL_DIR },
 ) {
     private val resolver = context.contentResolver
 
@@ -36,11 +39,11 @@ class MediaStoreSink(
 
     /** [subdir] = App 資料夾底下的子資料夾（null = 直接放在裡面）。 */
     fun relativePath(isImage: Boolean, subdir: String? = null): String =
-        (if (isImage) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/${DashcamConfig.LOCAL_DIR}/" +
+        (if (isImage) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/${albumDir()}/" +
             subdir?.let { "$it/" }.orEmpty()
 
     /** 相簿要讀的資料夾：App 的資料夾，加上使用者勾選的（例如 Astro App 的 Movies/astoramily）。 */
-    private fun libraryDirs(isImage: Boolean): List<String> = LocalLibrary.appDirs(isImage) + libraryFolders()
+    private fun libraryDirs(isImage: Boolean): List<String> = LocalLibrary.appDirs(isImage, albumDir()) + libraryFolders()
 
     private fun collection(isImage: Boolean): Uri =
         if (isImage) {
@@ -106,7 +109,7 @@ class MediaStoreSink(
     fun saveFile(source: File, displayName: String, mime: String, isImage: Boolean): Uri =
         writeNew(displayName, mime, isImage) { out -> source.inputStream().use { it.copyTo(out, 256 * 1024) } }
 
-    /** 把截圖存成 JPEG 放進 Pictures/Recora。 */
+    /** 把截圖存成 JPEG 放進 Pictures/<存檔資料夾>。 */
     fun saveJpeg(bitmap: Bitmap, displayName: String): Uri =
         writeNew(displayName, "image/jpeg", isImage = true) { out ->
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)) throw IOException("無法存成 JPEG")
@@ -118,15 +121,16 @@ class MediaStoreSink(
             .map { it.copy(size = runCatching { currentSize(it.uri) }.getOrDefault(it.size)) }
 
     /**
-     * 相簿分頁：Movies/Recora 與 Pictures/Recora（含子資料夾與改版前的 Dashcam、MufuDashcam），以及使用者勾選的資料夾，排除下載中的 pending 檔案。
+     * 相簿分頁：App 自己的資料夾（存檔資料夾、預設的 Recora 與改版前的 Dashcam、MufuDashcam，含子資料夾），以及使用者勾選的資料夾，排除下載中的 pending 檔案。
      * 沒有媒體讀取權限時只看得到本 App 建立的檔案。
      */
     fun listLibrary(): List<LocalMedia> {
         val out = ArrayList<LocalMedia>()
         val folders = libraryFolders()
+        val dir = albumDir()
         for (isImage in listOf(false, true)) {
             val base = collection(isImage)
-            val (selection, selectionArgs) = inDirs(LocalLibrary.appDirs(isImage) + folders)
+            val (selection, selectionArgs) = inDirs(LocalLibrary.appDirs(isImage, dir) + folders)
             val args = Bundle().apply {
                 putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
                 putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
@@ -155,6 +159,7 @@ class MediaStoreSink(
                         dateTakenMs = if (c.isNull(6)) null else c.getLong(6),
                         isImage = isImage,
                         folders = folders,
+                        albumDir = dir,
                     )?.let(out::add)
                 }
             }
@@ -210,7 +215,7 @@ class MediaStoreSink(
         extraSelection: String?,
         extraArgs: Array<String>?,
         matchPending: Int,
-        dirs: List<String> = listOf(relativePath(isImage)),
+        dirs: List<String> = LocalLibrary.appDirs(isImage, albumDir()),
     ): List<Entry> {
         val (dirSelection, dirArgs) = inDirs(dirs)
         val selection = if (extraSelection != null) "$dirSelection AND $extraSelection" else dirSelection

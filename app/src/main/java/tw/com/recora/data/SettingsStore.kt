@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -20,8 +21,8 @@ import tw.com.recora.BuildConfig
 /** 外觀主題。 */
 enum class ThemeMode(val label: String) { System("跟隨系統"), Light("淺色"), Dark("深色") }
 
-/** 剪輯匯出的影像編碼。 */
-enum class ExportCodec(val label: String) { H264("H.264"), H265("H.265") }
+/** 剪輯匯出的影像編碼；[Original] = 不重新編碼，直接複製記錄器的 H.265 畫面（解析度、畫質都跟原檔一樣）。 */
+enum class ExportCodec(val label: String) { H264("H.264"), H265("H.265"), Original("不重新編碼") }
 
 /** 剪輯匯出的解析度（只縮小、不放大）；[height] = null 維持原始解析度。 */
 enum class ExportResolution(val label: String, val height: Int?) {
@@ -53,6 +54,8 @@ data class AppSettings(
     /** 連上記錄器時，把還沒下載的緊急錄影自動加入下載佇列。 */
     val autoBackupEvents: Boolean = false,
     val downloadSubfolder: SubfolderMode = SubfolderMode.None,
+    /** 下載、匯出、截圖存到 Movies／Pictures 底下的哪個資料夾（只有一層資料夾名稱）。 */
+    val albumDir: String = DashcamConfig.LOCAL_DIR,
     /** 僅 debug build 有效：記錄器位址覆寫（例如 127.0.0.1:8080 的假記錄器，搭配 adb reverse），設定後略過 Wi-Fi 綁定。 */
     val hostOverride: String = "",
     /** 開啟 App 時「檔案」頁顯示的資料夾。 */
@@ -70,6 +73,11 @@ data class AppSettings(
     val exportQuality: ExportQuality = ExportQuality.Standard,
     /** 剪輯時「去除聲音」預設打開。 */
     val exportMute: Boolean = false,
+    /** 這支手機的編碼器實際輸出／要求的影像位元率（從匯出結果學來，預估檔案大小用）；null = 還沒匯出過。 */
+    val exportBitrateFactorH264: Float? = null,
+    val exportBitrateFactorH265: Float? = null,
+    /** 不重新編碼時：匯出檔／來源 TS 的位元率（TS 還含 360p 子串流，匯出只留主串流）。 */
+    val exportBitrateFactorOriginal: Float? = null,
     val themeMode: ThemeMode = ThemeMode.System,
     /** Android 12 以上依桌布配色。 */
     val dynamicColor: Boolean = true,
@@ -82,6 +90,18 @@ data class AppSettings(
     fun ssidPrefixFor(brand: Brand): String = if (brand == Brand.Astro) astroSsidPrefix else ssidPrefix
 
     fun passwordFor(brand: Brand): String = if (brand == Brand.Astro) astroWifiPassword else wifiPassword
+
+    fun exportBitrateFactor(codec: ExportCodec): Float? = when (codec) {
+        ExportCodec.H264 -> exportBitrateFactorH264
+        ExportCodec.H265 -> exportBitrateFactorH265
+        ExportCodec.Original -> exportBitrateFactorOriginal
+    }
+
+    fun withExportBitrateFactor(codec: ExportCodec, factor: Float): AppSettings = when (codec) {
+        ExportCodec.H264 -> copy(exportBitrateFactorH264 = factor)
+        ExportCodec.H265 -> copy(exportBitrateFactorH265 = factor)
+        ExportCodec.Original -> copy(exportBitrateFactorOriginal = factor)
+    }
 }
 
 /** enum 存成名稱；讀不到或已不存在的值（例如改版拿掉的選項）退回 [default]。 */
@@ -102,6 +122,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val includeRear = booleanPreferencesKey("include_rear")
         val autoBackupEvents = booleanPreferencesKey("auto_backup_events")
         val downloadSubfolder = stringPreferencesKey("download_subfolder")
+        val albumDir = stringPreferencesKey("album_dir")
         val hostOverride = stringPreferencesKey("host_override")
         val startFolder = stringPreferencesKey("start_folder")
         val libraryGrid = booleanPreferencesKey("library_grid")
@@ -112,6 +133,9 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val exportResolution = stringPreferencesKey("export_resolution")
         val exportQuality = stringPreferencesKey("export_quality")
         val exportMute = booleanPreferencesKey("export_mute")
+        val exportBitrateFactorH264 = floatPreferencesKey("export_bitrate_factor_h264")
+        val exportBitrateFactorH265 = floatPreferencesKey("export_bitrate_factor_h265")
+        val exportBitrateFactorOriginal = floatPreferencesKey("export_bitrate_factor_original")
         val themeMode = stringPreferencesKey("theme_mode")
         val dynamicColor = booleanPreferencesKey("dynamic_color")
     }
@@ -128,6 +152,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
 
     private fun read(p: Preferences): AppSettings {
         val d = AppSettings()
+        val albumDir = p[Keys.albumDir]?.takeIf(LocalLibrary::isValidAlbumDir) ?: d.albumDir
         return AppSettings(
             wifiPassword = p[Keys.password] ?: d.wifiPassword,
             ssidPrefix = p[Keys.ssidPrefix] ?: d.ssidPrefix,
@@ -137,16 +162,20 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
             includeRear = p[Keys.includeRear] ?: d.includeRear,
             autoBackupEvents = p[Keys.autoBackupEvents] ?: d.autoBackupEvents,
             downloadSubfolder = enumOr(p[Keys.downloadSubfolder], d.downloadSubfolder),
+            albumDir = albumDir,
             hostOverride = p[Keys.hostOverride] ?: d.hostOverride,
             startFolder = enumOr(p[Keys.startFolder], d.startFolder),
             libraryGrid = p[Keys.libraryGrid] ?: d.libraryGrid,
-            libraryFolders = p[Keys.libraryFolders]?.let(LocalLibrary::extraFolders) ?: d.libraryFolders,
+            libraryFolders = p[Keys.libraryFolders]?.let { LocalLibrary.extraFolders(it, albumDir) } ?: d.libraryFolders,
             autoPlayNext = p[Keys.autoPlayNext] ?: d.autoPlayNext,
             screenshotVisibleArea = p[Keys.screenshotVisibleArea] ?: d.screenshotVisibleArea,
             exportCodec = enumOr(p[Keys.exportCodec], d.exportCodec),
             exportResolution = enumOr(p[Keys.exportResolution], d.exportResolution),
             exportQuality = enumOr(p[Keys.exportQuality], d.exportQuality),
             exportMute = p[Keys.exportMute] ?: d.exportMute,
+            exportBitrateFactorH264 = p[Keys.exportBitrateFactorH264],
+            exportBitrateFactorH265 = p[Keys.exportBitrateFactorH265],
+            exportBitrateFactorOriginal = p[Keys.exportBitrateFactorOriginal],
             themeMode = enumOr(p[Keys.themeMode], d.themeMode),
             dynamicColor = p[Keys.dynamicColor] ?: d.dynamicColor,
         )
@@ -161,6 +190,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         p[Keys.includeRear] = s.includeRear
         p[Keys.autoBackupEvents] = s.autoBackupEvents
         p[Keys.downloadSubfolder] = s.downloadSubfolder.name
+        p[Keys.albumDir] = s.albumDir
         p[Keys.hostOverride] = s.hostOverride
         p[Keys.startFolder] = s.startFolder.name
         p[Keys.libraryGrid] = s.libraryGrid
@@ -171,6 +201,9 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         p[Keys.exportResolution] = s.exportResolution.name
         p[Keys.exportQuality] = s.exportQuality.name
         p[Keys.exportMute] = s.exportMute
+        s.exportBitrateFactorH264?.let { p[Keys.exportBitrateFactorH264] = it } ?: p.remove(Keys.exportBitrateFactorH264)
+        s.exportBitrateFactorH265?.let { p[Keys.exportBitrateFactorH265] = it } ?: p.remove(Keys.exportBitrateFactorH265)
+        s.exportBitrateFactorOriginal?.let { p[Keys.exportBitrateFactorOriginal] = it } ?: p.remove(Keys.exportBitrateFactorOriginal)
         p[Keys.themeMode] = s.themeMode.name
         p[Keys.dynamicColor] = s.dynamicColor
     }

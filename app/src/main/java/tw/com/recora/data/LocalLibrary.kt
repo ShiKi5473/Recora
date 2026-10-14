@@ -40,7 +40,7 @@ data class LocalMedia(
 )
 
 /**
- * 相簿收 App 自己的資料夾（Movies/Recora、Pictures/Recora 與改版前的 Dashcam、MufuDashcam，一定會讀），以及使用者在設定勾選的資料夾
+ * 相簿收 App 自己的資料夾（「App 設定」的存檔資料夾、預設的 Recora 與改版前的 Dashcam、MufuDashcam，一定會讀），以及使用者在設定勾選的資料夾
  * （預設 [DEFAULT_FOLDERS]）；依檔名分成未剪輯／已剪輯／照片，並決定每個檔案的時間。
  * 剪輯檔名對應 [tw.com.recora.ui.editor.EditorScreen] 的輸出：
  * 已剪輯 `<原檔名>_0m10s0-0m15s0[_靜音].mp4`、截圖 `<原檔名>_0m15s0.jpg`。
@@ -48,18 +48,28 @@ data class LocalMedia(
  * 官方 App 存的也認得：`EMER…F_P1.mp4` 是原始檔，`video_2026-0922-150830_10_E_O_N_38072.mp4` 是剪輯（檔名時間 = 存檔時間）。
  */
 object LocalLibrary {
-    private val LOCAL_DIRS = listOf(DashcamConfig.LOCAL_DIR) + DashcamConfig.LEGACY_LOCAL_DIRS
-    private val MOVIES_DIRS = LOCAL_DIRS.map { "Movies/$it/" }
-    private val PICTURES_DIRS = LOCAL_DIRS.map { "Pictures/$it/" }
-
     /** 相簿預設也讀的資料夾：Astro 記錄器 App（com.ligo.aAstroCam）存原始影片的地方。 */
     val DEFAULT_FOLDERS: Set<String> = setOf("Movies/astoramily/")
 
-    /** App 自己的資料夾（新的在前，加上改版前的舊資料夾）：一定會讀，不受「相簿資料夾」勾選影響。 */
-    fun appDirs(isImage: Boolean): List<String> = if (isImage) PICTURES_DIRS else MOVIES_DIRS
+    /**
+     * App 自己的資料夾：「App 設定」的存檔資料夾 [albumDir] 在前，加上預設的 Recora 與改版前的舊資料夾
+     * （改過存檔資料夾，以前存的照樣讀得到）。一定會讀，不受「相簿資料夾」勾選影響。
+     */
+    fun appDirs(isImage: Boolean, albumDir: String = DashcamConfig.LOCAL_DIR): List<String> =
+        (listOf(albumDir, DashcamConfig.LOCAL_DIR) + DashcamConfig.LEGACY_LOCAL_DIRS)
+            .distinctBy { it.lowercase() }
+            .map { (if (isImage) "Pictures/" else "Movies/") + "$it/" }
 
     /** 設定裡存的相簿資料夾去掉 App 自己的（一定會讀，不需要也不該出現在勾選清單）。 */
-    fun extraFolders(saved: Collection<String>): Set<String> = saved.filterNot(::isAppFolder).toSet()
+    fun extraFolders(saved: Collection<String>, albumDir: String = DashcamConfig.LOCAL_DIR): Set<String> =
+        saved.filterNot { isAppFolder(it, albumDir) }.toSet()
+
+    /** 存檔資料夾名稱能不能用：一層資料夾、不是隱藏資料夾、前後沒有空白、不含路徑或檔名不允許的字元。 */
+    fun isValidAlbumDir(name: String): Boolean =
+        name.isNotEmpty() && name == name.trim() && name.length <= 64 && !name.startsWith(".") &&
+            name.none { it in INVALID_DIR_CHARS || it.isISOControl() }
+
+    private const val INVALID_DIR_CHARS = "/\\:*?\"<>|"
 
     /** 認得的資料夾 → 記錄器種類（檔名看不出種類時用）。 */
     private val FOLDER_BRANDS = mapOf("Movies/astoramily/" to Brand.Astro)
@@ -73,13 +83,13 @@ object LocalLibrary {
         Regex("""^video_(\d{4})-(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_\d+_E_O_N_\d+(?: \(\d+\))?\.mp4$""", RegexOption.IGNORE_CASE)
 
     /** App 自己的資料夾（含子資料夾，以及改版前的舊資料夾）：下載與匯出都放這裡，相簿一定會讀。 */
-    fun isAppFolder(relativePath: String): Boolean =
-        appDirs(false).any { relativePath.startsWith(it, ignoreCase = true) } ||
-            appDirs(true).any { relativePath.startsWith(it, ignoreCase = true) }
+    fun isAppFolder(relativePath: String, albumDir: String = DashcamConfig.LOCAL_DIR): Boolean =
+        appDirs(false, albumDir).any { relativePath.startsWith(it, ignoreCase = true) } ||
+            appDirs(true, albumDir).any { relativePath.startsWith(it, ignoreCase = true) }
 
     /** App 自己的資料夾或 [folders] 裡（含子資料夾）。 */
-    fun isIncluded(relativePath: String, folders: Collection<String>): Boolean =
-        isAppFolder(relativePath) || folders.any { relativePath.startsWith(it, ignoreCase = true) }
+    fun isIncluded(relativePath: String, folders: Collection<String>, albumDir: String = DashcamConfig.LOCAL_DIR): Boolean =
+        isAppFolder(relativePath, albumDir) || folders.any { relativePath.startsWith(it, ignoreCase = true) }
 
     /**
      * MediaStore 的一列 → [LocalMedia]；不在相簿資料夾（App 的資料夾與 [folders]）的檔案回 null。
@@ -96,8 +106,9 @@ object LocalLibrary {
         zone: ZoneId = ZoneId.systemDefault(),
         isImage: Boolean = FileNames.isImage(name),
         folders: Collection<String> = DEFAULT_FOLDERS,
+        albumDir: String = DashcamConfig.LOCAL_DIR,
     ): LocalMedia? {
-        if (!isIncluded(relativePath, folders)) return null
+        if (!isIncluded(relativePath, folders, albumDir)) return null
         val added = LocalDateTime.ofInstant(Instant.ofEpochSecond(dateAddedSec), zone)
         val taken = dateTakenMs?.takeIf { it > 0 }?.let { LocalDateTime.ofInstant(Instant.ofEpochMilli(it), zone) }
         val folderBrand = FOLDER_BRANDS.entries.firstOrNull { relativePath.startsWith(it.key, ignoreCase = true) }?.value
@@ -125,7 +136,7 @@ object LocalLibrary {
             )
         }
         val info = FileNames.parse(name)
-        val inAppMovies = appDirs(false).any { relativePath.startsWith(it, ignoreCase = true) }
+        val inAppMovies = appDirs(false, albumDir).any { relativePath.startsWith(it, ignoreCase = true) }
         // App 資料夾裡看不出來源的 MP4：本 App 匯出、後來改過名的剪輯
         if (info == null && inAppMovies && FileNames.extension(name) == "MP4") {
             return LocalMedia(uri, name, MediaKind.Edited, added, sizeBytes, durationMs)

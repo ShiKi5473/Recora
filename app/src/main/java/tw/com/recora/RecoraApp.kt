@@ -91,7 +91,7 @@ class AppContainer(val app: Application) {
     val api: DashcamApi get() = apiOf(connection.currentBrand)
 
     val files = DashcamFiles({ api }, connection, appScope).also { astro.onRecordingResumed = it::invalidateAll }
-    val sink = MediaStoreSink(app) { settings.state.value.libraryFolders }
+    val sink = MediaStoreSink(app, { settings.state.value.libraryFolders }, { settings.state.value.albumDir })
     val downloads = DownloadRepository(
         app, ::apiOf, sink, http, appScope,
         queueStore = QueueStore(File(app.filesDir, "download_queue.tsv")),

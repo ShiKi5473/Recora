@@ -1,5 +1,6 @@
 package tw.com.recora.ui.editor
 
+import android.net.Uri
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -48,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,6 +67,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.transformer.ExportException
@@ -76,8 +80,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.com.recora.AppContainer
+import tw.com.recora.data.AppSettings
 import tw.com.recora.data.Camera
-import tw.com.recora.data.DashcamConfig
 import tw.com.recora.data.EditPlan
 import tw.com.recora.data.ExportCodec
 import tw.com.recora.data.FileNames
@@ -135,11 +139,22 @@ fun EditorScreen(
     var confirmLeave by remember { mutableStateOf(false) }
     var addingSegment by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    // 播放器讀到（或換了）影音軌時加一，預估檔案大小跟著重算
+    var formatVersion by remember { mutableIntStateOf(0) }
+    var sourceBitrate by remember { mutableStateOf<Int?>(null) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 scope.launch { snackbar.showSnackbar(playbackErrorMessage(error, streaming = false)) }
+            }
+
+            override fun onTracksChanged(tracks: Tracks) {
+                formatVersion++
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                formatVersion++
             }
         }
         player.addListener(listener)
@@ -160,18 +175,22 @@ fun EditorScreen(
         player.seekTo(index, local)
     }
 
-    // 更新目前位置；播放到選取範圍終點時停下
+    // 更新目前位置；播放中經過選取範圍終點時停下。
+    // 只看「經過」：本來就在終點之後（例如接上後一段、往後看終點之後的畫面）按播放就照常播，不會被拉回終點
     LaunchedEffect(player) {
+        var lastMs = 0L
         while (true) {
             if (segments.size == 1 && segments[0].durationMs <= 0 && player.duration > 0) {
                 segments = listOf(segments[0].copy(durationMs = player.duration))
                 range = 0f..player.duration.toFloat()
             }
             positionMs = combinedPosition()
-            if (player.isPlaying && segments.sumOf { it.durationMs } > 0 && positionMs >= range.endInclusive.toLong()) {
+            val end = range.endInclusive.toLong()
+            if (player.isPlaying && segments.sumOf { it.durationMs } > 0 && lastMs < end && positionMs >= end) {
                 player.pause()
-                seekCombined(range.endInclusive.toLong())
+                seekCombined(end)
             }
+            lastMs = positionMs
             delay(100)
         }
     }
@@ -184,6 +203,13 @@ fun EditorScreen(
             }
         }
         counterpartUris = if (found.all { it != null }) found.filterNotNull() else null
+    }
+    // 來源 TS 的平均位元率：不重新編碼時預估檔案大小用
+    LaunchedEffect(segments) {
+        val bytes = withContext(Dispatchers.IO) {
+            segments.sumOf { s -> runCatching { container.sink.currentSize(Uri.parse(s.uri)) }.getOrDefault(0L) }
+        }
+        sourceBitrate = ExportOptions.averageBitrate(bytes, segments.sumOf { it.durationMs })
     }
 
     val startMs = range.start.roundToLong()
@@ -231,8 +257,11 @@ fun EditorScreen(
         if (!contiguous) return "${next.name} 跟目前的片段沒有接在一起（中間可能少了一段）"
         val segment = Segment(next.uri, next.name, duration)
         if (forward) {
+            // 終點原本在時間軸最後面（沒剪掉結尾）就延伸到新一段的結尾，播放範圍才會接著播下去
+            val oldTotal = segments.sumOf { it.durationMs }
             segments = segments + segment
             player.addMediaItem(MediaItem.fromUri(segment.uri))
+            if (range.endInclusive.roundToLong() >= oldTotal) range = range.start..(oldTotal + duration).toFloat()
         } else {
             segments = listOf(segment) + segments
             player.addMediaItem(0, MediaItem.fromUri(segment.uri))
@@ -268,23 +297,52 @@ fun EditorScreen(
         range = if (end - start >= MIN_CLIP_MS) start..end else 0f..total
     }
 
-    /** 依「App 設定」的匯出設定組出請求。 */
-    fun exportRequest(pieces: List<ExportPiece>): ExportRequest {
-        val s = container.settings.state.value
+    /**
+     * 依匯出設定 [s] 算出輸出的規格；讀不到來源的解析度、影格率時以 1920×1080、30 fps 計算。
+     * 不重新編碼時解析度跟原檔一樣，不看解析度設定。
+     */
+    fun outputSpec(s: AppSettings): OutputSpec {
         val codec = effectiveCodec(s.exportCodec)
         val video = player.videoSize
         val srcW = video.width.takeIf { it > 0 } ?: 1920
         val srcH = video.height.takeIf { it > 0 } ?: 1080
-        val outH = ExportOptions.outputHeight(srcH, s.exportResolution)
-        val outW = if (outH != null) srcW * outH / srcH else srcW
+        val scaledHeight = if (codec == ExportCodec.Original) null else ExportOptions.outputHeight(srcH, s.exportResolution)
+        val outW = if (scaledHeight != null) srcW * scaledHeight / srcH else srcW
         val fps = player.videoFormat?.frameRate?.takeIf { it > 0 } ?: 30f
+        return OutputSpec(outW, scaledHeight ?: srcH, scaledHeight, fps, codec)
+    }
+
+    /** 依「App 設定」的匯出設定組出請求。 */
+    fun exportRequest(pieces: List<ExportPiece>): ExportRequest {
+        val s = container.settings.state.value
+        val spec = outputSpec(s)
         return ExportRequest(
             pieces = pieces,
             removeAudio = removeAudio,
-            videoMimeType = if (codec == ExportCodec.H265) MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264,
-            outputHeight = outH,
-            bitrate = ExportOptions.bitrate(outW, outH ?: srcH, fps, codec, s.exportQuality),
+            videoMimeType = when (spec.codec) {
+                ExportCodec.H264 -> MimeTypes.VIDEO_H264
+                ExportCodec.H265 -> MimeTypes.VIDEO_H265
+                ExportCodec.Original -> null
+            },
+            outputHeight = spec.scaledHeight,
+            bitrate = ExportOptions.bitrate(spec.width, spec.height, spec.fps, spec.codec, s.exportQuality),
         )
+    }
+
+    /** 預估用的影像位元率（見 [ExportOptions.videoBitrate]）。 */
+    fun videoBitrate(s: AppSettings, spec: OutputSpec): Int =
+        ExportOptions.videoBitrate(spec.width, spec.height, spec.fps, spec.codec, s.exportQuality, sourceBitrate)
+
+    /** 匯出檔的聲音位元率；去除聲音或來源沒有聲音（例如後鏡頭）時是 0。 */
+    fun audioBitrate(): Int {
+        val audio = player.audioFormat
+        return if (removeAudio || audio == null) 0 else audio.bitrate.takeIf { it > 0 } ?: ExportOptions.DEFAULT_AUDIO_BITRATE
+    }
+
+    /** 預估匯出一支的檔案大小（目前的範圍與匯出設定），用之前匯出學到的編碼器倍數校正。 */
+    fun estimatedBytes(s: AppSettings): Long {
+        val spec = outputSpec(s)
+        return ExportOptions.estimatedBytes(endMs - startMs, videoBitrate(s, spec), audioBitrate(), s.exportBitrateFactor(spec.codec) ?: 1f)
     }
 
     fun export() {
@@ -298,6 +356,11 @@ fun EditorScreen(
             val otherTitle = FileNames.counterpartName(segments[firstSegment].title)
             if (alsoOtherCamera && others != null && otherTitle != null) add(others to otherTitle)
         }
+        // 匯出完用實際檔案大小校正預估（只看第一支：另一個鏡頭的解析度可能不同）
+        val spec = outputSpec(container.settings.state.value)
+        val requestedVideoBps = videoBitrate(container.settings.state.value, spec)
+        val audioBps = audioBitrate()
+        val clipMs = endMs - startMs
         player.pause()
         exportProgress = 0
         exportJob = scope.launch {
@@ -313,6 +376,15 @@ fun EditorScreen(
                     } catch (e: ExportException) {
                         failure = "匯出失敗：${e.message}"
                         break
+                    }
+                    if (i == 0) {
+                        ExportOptions.measuredFactor(file.length(), clipMs, requestedVideoBps, audioBps)?.let { measured ->
+                            container.appScope.launch {
+                                container.settings.update {
+                                    it.withExportBitrateFactor(spec.codec, ExportOptions.mergeFactor(it.exportBitrateFactor(spec.codec), measured))
+                                }
+                            }
+                        }
                     }
                     try {
                         withContext(Dispatchers.IO) {
@@ -412,6 +484,17 @@ fun EditorScreen(
                     "起點 ${clock(startMs)}　終點 ${clock(endMs)}　長度 ${clock(endMs - startMs)}",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                if (totalMs > 0) {
+                    val estimate = remember(formatVersion, sourceBitrate, startMs, endMs, removeAudio, settings) { estimatedBytes(settings) }
+                    val another = alsoOtherCamera && counterpartUris != null
+                    Text(
+                        "預估檔案大小 約 ${Formats.size(estimate)}" +
+                            (if (another) "（另一個鏡頭的那支另計）" else "") +
+                            "，實際大小依畫面變化多寡而定",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     val canStep = !exporting && totalMs > 0
                     listOf("−1 秒" to { -1000L }, "−1 格" to { -frameMs() }, "+1 格" to { frameMs() }, "+1 秒" to { 1000L })
@@ -491,8 +574,13 @@ fun EditorScreen(
                     Column(Modifier.weight(1f)) {
                         Text("匯出設定")
                         Text(
-                            "${effectiveCodec(settings.exportCodec).label}・${settings.exportResolution.label}・" +
-                                "${settings.exportQuality.label}畫質",
+                            effectiveCodec(settings.exportCodec).let { codec ->
+                                if (codec == ExportCodec.Original) {
+                                    "不重新編碼（畫質、解析度同原檔）"
+                                } else {
+                                    "${codec.label}・${settings.exportResolution.label}・${settings.exportQuality.label}畫質"
+                                }
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -517,7 +605,7 @@ fun EditorScreen(
                     }
                 }
                 Text(
-                    "匯出的 MP4 存到 Movies/${DashcamConfig.LOCAL_DIR}；截圖存到 Pictures/${DashcamConfig.LOCAL_DIR}。",
+                    "匯出的 MP4 存到 Movies/${settings.albumDir}；截圖存到 Pictures/${settings.albumDir}。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -563,6 +651,9 @@ fun EditorScreen(
         )
     }
 }
+
+/** 匯出的輸出規格；[scaledHeight] = null 表示維持原始解析度（不縮放）。 */
+private data class OutputSpec(val width: Int, val height: Int, val scaledHeight: Int?, val fps: Float, val codec: ExportCodec)
 
 private const val MIN_CLIP_MS = 500L
 

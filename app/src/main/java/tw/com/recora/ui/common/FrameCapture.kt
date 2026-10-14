@@ -16,7 +16,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.com.recora.AppContainer
-import tw.com.recora.data.DashcamConfig
 import tw.com.recora.data.LocalLibrary
 import kotlin.math.roundToInt
 
@@ -50,7 +49,7 @@ fun captureFrame(
                 container.sink.saveJpeg(bitmap, name)
             }
             container.libraryChanged.tryEmit(Unit)
-            "已存${if (crop != null) "放大範圍的" else ""}截圖 $name 到 Pictures/${DashcamConfig.LOCAL_DIR}"
+            "已存${if (crop != null) "放大範圍的" else ""}截圖 $name 到 Pictures/${container.settings.state.value.albumDir}"
         } catch (e: Exception) {
             "截圖儲存失敗：${e.message}"
         }
