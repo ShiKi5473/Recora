@@ -48,8 +48,14 @@ data class LocalMedia(
  * 官方 App 存的也認得：`EMER…F_P1.mp4` 是原始檔，`video_2026-0922-150830_10_E_O_N_38072.mp4` 是剪輯（檔名時間 = 存檔時間）。
  */
 object LocalLibrary {
-    /** 相簿預設也讀的資料夾：Astro 記錄器 App（com.ligo.aAstroCam）存原始影片的地方。 */
-    val DEFAULT_FOLDERS: Set<String> = setOf("Movies/astoramily/")
+    /** Astro 記錄器 App（com.ligo.aAstroCam）存原始影片的資料夾（2026-10-14 在實機上確認）。 */
+    const val ASTRO_FOLDER = "Movies/astroFamily/"
+
+    /** 舊版預設寫錯的 Astro 資料夾（手機上沒有這個資料夾）；設定裡存著的換成 [ASTRO_FOLDER]。 */
+    private const val MISSPELLED_ASTRO_FOLDER = "Movies/astoramily/"
+
+    /** 相簿預設也讀的資料夾：Astro 記錄器 App 存原始影片的地方。 */
+    val DEFAULT_FOLDERS: Set<String> = setOf(ASTRO_FOLDER)
 
     /**
      * App 自己的資料夾：「App 設定」的存檔資料夾 [albumDir] 在前，加上預設的 Recora 與改版前的舊資料夾
@@ -60,9 +66,14 @@ object LocalLibrary {
             .distinctBy { it.lowercase() }
             .map { (if (isImage) "Pictures/" else "Movies/") + "$it/" }
 
-    /** 設定裡存的相簿資料夾去掉 App 自己的（一定會讀，不需要也不該出現在勾選清單）。 */
+    /**
+     * 設定裡存的相簿資料夾去掉 App 自己的（一定會讀，不需要也不該出現在勾選清單），
+     * 舊版寫錯的 Astro 資料夾換成正確的。
+     */
     fun extraFolders(saved: Collection<String>, albumDir: String = DashcamConfig.LOCAL_DIR): Set<String> =
-        saved.filterNot { isAppFolder(it, albumDir) }.toSet()
+        saved.map { if (it.equals(MISSPELLED_ASTRO_FOLDER, ignoreCase = true)) ASTRO_FOLDER else it }
+            .filterNot { isAppFolder(it, albumDir) }
+            .toSet()
 
     /** 存檔資料夾名稱能不能用：一層資料夾、不是隱藏資料夾、前後沒有空白、不含路徑或檔名不允許的字元。 */
     fun isValidAlbumDir(name: String): Boolean =
@@ -72,7 +83,7 @@ object LocalLibrary {
     private const val INVALID_DIR_CHARS = "/\\:*?\"<>|"
 
     /** 認得的資料夾 → 記錄器種類（檔名看不出種類時用）。 */
-    private val FOLDER_BRANDS = mapOf("Movies/astoramily/" to Brand.Astro)
+    private val FOLDER_BRANDS = mapOf(ASTRO_FOLDER to Brand.Astro)
 
     private val EDITED_RE =
         Regex("""^(.+)_(\d+)m(\d{2})s(\d)-(\d+)m(\d{2})s(\d)(_靜音)?(?: \(\d+\))?\.mp4$""", RegexOption.IGNORE_CASE)

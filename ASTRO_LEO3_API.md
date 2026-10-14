@@ -241,7 +241,7 @@ http://192.168.1.254/DCIM/VIDEO_F/20261013204629_004665F.MP4
 
 - **【APK】官方 App 下載時送 `Range: bytes=<已下載>-`**（`com.ligo.camera.filemanage.g`），讀遠端檔案的 GPS 也用 Range，
   所以應該支援續傳與 MP4 串流的 seek。回 206 待實測。
-- 官方 App 存到手機的 `Movies/astoramily/`，檔名不變。
+- 官方 App 存到手機的 `Movies/astroFamily/`，檔名不變（2026-10-14 實機確認；先前誤記為 `astoramily`）。
 
 ### 3.3 縮圖
 

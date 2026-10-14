@@ -8,6 +8,8 @@ import tw.com.recora.data.ExportQuality
 import tw.com.recora.data.ExportResolution
 import tw.com.recora.data.ThemeMode
 import tw.com.recora.data.enumOr
+import tw.com.recora.data.migrateFactorsV1
+import tw.com.recora.data.parseFactors
 import tw.com.recora.ui.editor.ExportOptions
 
 class ExportOptionsTest {
@@ -78,6 +80,41 @@ class ExportOptionsTest {
         assertEquals(9_289_728, ExportOptions.videoBitrate(2560, 1440, 30f, ExportCodec.Original, ExportQuality.High))
         assertNull(ExportOptions.averageBitrate(0, 63_308))
         assertNull(ExportOptions.averageBitrate(92_182_792, 0))
+    }
+
+    @Test
+    fun factorsAreKeptPerSetting() {
+        assertEquals("H264|1440|Standard|TS", ExportOptions.factorKey(ExportCodec.H264, 1440, ExportQuality.Standard, "TS"))
+        assertEquals("Original|MP4", ExportOptions.factorKey(ExportCodec.Original, 1440, ExportQuality.Small, "MP4"))
+        // 實測：同一個 H.264 編碼器，1080p 省空間超出得比 1440p 標準多很多，不能共用
+        val factors = mapOf(
+            "H264|1440|Standard|TS" to 1.24f, "H264|1080|Small|TS" to 1.93f, "H264|1440|Small|TS" to 1.25f, "Original|TS" to 0.85f,
+        )
+        assertEquals(1.24f, ExportOptions.lookupFactor(factors, "H264|1440|Standard|TS")!!, 0f)
+        // 沒匯出過的解析度：借用同編碼、同畫質、同來源容器的平均
+        assertEquals(1.59f, ExportOptions.lookupFactor(factors, "H264|720|Small|TS")!!, 0.001f)
+        // 不同畫質、不同編碼、不同來源容器都不借用：Mufu 的 TS 多一路子串流，Astro 的 MP4 沒有
+        assertNull(ExportOptions.lookupFactor(factors, "H264|720|High|TS"))
+        assertNull(ExportOptions.lookupFactor(factors, "H265|1440|Standard|TS"))
+        assertNull(ExportOptions.lookupFactor(factors, "H264|1440|Standard|MP4"))
+        assertNull(ExportOptions.lookupFactor(factors, "Original|MP4"))
+    }
+
+    @Test
+    fun storedFactorsParse() {
+        assertEquals(
+            mapOf("H264|1440|Standard|TS" to 1.24f, "Original|TS" to 0.86f),
+            parseFactors(setOf("H264|1440|Standard|TS=1.24", "Original|TS=0.86", "broken", "=1.0", "x=abc")),
+        )
+    }
+
+    @Test
+    fun factorsWithoutContainerBecomeTs() {
+        // 還沒分來源容器時只匯出過 Mufu 的 TS
+        assertEquals(
+            mapOf("H264|1440|Standard|TS" to 1.21f, "Original|TS" to 0.85f),
+            migrateFactorsV1(mapOf("H264|1440|Standard" to 1.21f, "Original" to 0.85f)),
+        )
     }
 
     @Test

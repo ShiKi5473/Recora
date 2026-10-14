@@ -42,7 +42,7 @@ class MediaStoreSink(
         (if (isImage) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES) + "/${albumDir()}/" +
             subdir?.let { "$it/" }.orEmpty()
 
-    /** 相簿要讀的資料夾：App 的資料夾，加上使用者勾選的（例如 Astro App 的 Movies/astoramily）。 */
+    /** 相簿要讀的資料夾：App 的資料夾，加上使用者勾選的（例如 Astro App 的 Movies/astroFamily）。 */
     private fun libraryDirs(isImage: Boolean): List<String> = LocalLibrary.appDirs(isImage, albumDir()) + libraryFolders()
 
     private fun collection(isImage: Boolean): Uri =

@@ -2,6 +2,7 @@ package tw.com.recora.ui.editor
 
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
@@ -80,6 +81,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.com.recora.AppContainer
+import tw.com.recora.BuildConfig
 import tw.com.recora.data.AppSettings
 import tw.com.recora.data.Camera
 import tw.com.recora.data.EditPlan
@@ -333,6 +335,10 @@ fun EditorScreen(
     fun videoBitrate(s: AppSettings, spec: OutputSpec): Int =
         ExportOptions.videoBitrate(spec.width, spec.height, spec.fps, spec.codec, s.exportQuality, sourceBitrate)
 
+    /** 預估倍數的 key（見 [ExportOptions.factorKey]）；來源容器看第一段的副檔名（接起來的段都是同一台記錄器）。 */
+    fun factorKey(s: AppSettings, spec: OutputSpec): String =
+        ExportOptions.factorKey(spec.codec, spec.height, s.exportQuality, FileNames.extension(segments.first().title))
+
     /** 匯出檔的聲音位元率；去除聲音或來源沒有聲音（例如後鏡頭）時是 0。 */
     fun audioBitrate(): Int {
         val audio = player.audioFormat
@@ -342,7 +348,8 @@ fun EditorScreen(
     /** 預估匯出一支的檔案大小（目前的範圍與匯出設定），用之前匯出學到的編碼器倍數校正。 */
     fun estimatedBytes(s: AppSettings): Long {
         val spec = outputSpec(s)
-        return ExportOptions.estimatedBytes(endMs - startMs, videoBitrate(s, spec), audioBitrate(), s.exportBitrateFactor(spec.codec) ?: 1f)
+        val factor = ExportOptions.lookupFactor(s.exportBitrateFactors, factorKey(s, spec))
+        return ExportOptions.estimatedBytes(endMs - startMs, videoBitrate(s, spec), audioBitrate(), factor ?: 1f)
     }
 
     fun export() {
@@ -359,8 +366,11 @@ fun EditorScreen(
         // 匯出完用實際檔案大小校正預估（只看第一支：另一個鏡頭的解析度可能不同）
         val spec = outputSpec(container.settings.state.value)
         val requestedVideoBps = videoBitrate(container.settings.state.value, spec)
+        val factorKey = factorKey(container.settings.state.value, spec)
         val audioBps = audioBitrate()
         val clipMs = endMs - startMs
+        val estimate = estimatedBytes(container.settings.state.value)
+        val startedAt = SystemClock.elapsedRealtime()
         player.pause()
         exportProgress = 0
         exportJob = scope.launch {
@@ -378,10 +388,25 @@ fun EditorScreen(
                         break
                     }
                     if (i == 0) {
-                        ExportOptions.measuredFactor(file.length(), clipMs, requestedVideoBps, audioBps)?.let { measured ->
+                        val measuredFactor = ExportOptions.measuredFactor(file.length(), clipMs, requestedVideoBps, audioBps)
+                        // debug build：校正預估用，腳本從 logcat 收集（adb logcat -s RecoraExport）
+                        if (BuildConfig.DEBUG) {
+                            Log.i(
+                                "RecoraExport",
+                                "name=$name codec=${spec.codec} size=${spec.width}x${spec.height} " +
+                                    "quality=${container.settings.state.value.exportQuality} mute=$removeAudio segments=${segments.size} " +
+                                    "clipMs=$clipMs estimate=$estimate actual=${file.length()} videoBps=$requestedVideoBps " +
+                                    "audioBps=$audioBps factorKey=$factorKey factorBefore=${container.settings.state.value.exportBitrateFactors[factorKey]} " +
+                                    "measured=$measuredFactor tookMs=${SystemClock.elapsedRealtime() - startedAt}",
+                            )
+                        }
+                        measuredFactor?.let { measured ->
                             container.appScope.launch {
                                 container.settings.update {
-                                    it.withExportBitrateFactor(spec.codec, ExportOptions.mergeFactor(it.exportBitrateFactor(spec.codec), measured))
+                                    it.copy(
+                                        exportBitrateFactors = it.exportBitrateFactors +
+                                            (factorKey to ExportOptions.mergeFactor(it.exportBitrateFactors[factorKey], measured)),
+                                    )
                                 }
                             }
                         }

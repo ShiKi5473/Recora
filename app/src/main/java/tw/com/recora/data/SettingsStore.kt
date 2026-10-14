@@ -21,7 +21,7 @@ import tw.com.recora.BuildConfig
 /** 外觀主題。 */
 enum class ThemeMode(val label: String) { System("跟隨系統"), Light("淺色"), Dark("深色") }
 
-/** 剪輯匯出的影像編碼；[Original] = 不重新編碼，直接複製記錄器的 H.265 畫面（解析度、畫質都跟原檔一樣）。 */
+/** 剪輯匯出的影像編碼；[Original] = 不重新編碼，直接複製原本的畫面（Mufu 是 H.265、Astro 是 H.264；解析度、畫質都跟原檔一樣）。 */
 enum class ExportCodec(val label: String) { H264("H.264"), H265("H.265"), Original("不重新編碼") }
 
 /** 剪輯匯出的解析度（只縮小、不放大）；[height] = null 維持原始解析度。 */
@@ -73,11 +73,12 @@ data class AppSettings(
     val exportQuality: ExportQuality = ExportQuality.Standard,
     /** 剪輯時「去除聲音」預設打開。 */
     val exportMute: Boolean = false,
-    /** 這支手機的編碼器實際輸出／要求的影像位元率（從匯出結果學來，預估檔案大小用）；null = 還沒匯出過。 */
-    val exportBitrateFactorH264: Float? = null,
-    val exportBitrateFactorH265: Float? = null,
-    /** 不重新編碼時：匯出檔／來源 TS 的位元率（TS 還含 360p 子串流，匯出只留主串流）。 */
-    val exportBitrateFactorOriginal: Float? = null,
+    /**
+     * 這支手機的編碼器實際輸出／要求的影像位元率，從匯出結果學來，預估檔案大小用。
+     * 依匯出設定分開記（key 見 [tw.com.recora.ui.editor.ExportOptions.factorKey]）：
+     * 實測同一個 H.264 編碼器，/** 還沒分來源容器的倍數（`H264|1440|Standard`、`Original`）：當時都是 Mufu 的 TS，補上 `|TS`。 */p 標準多出 24%，1080p 省空間卻多出 90%。
+     */
+    val exportBitrateFactors: Map<String, Float> = emptyMap(),
     val themeMode: ThemeMode = ThemeMode.System,
     /** Android 12 以上依桌布配色。 */
     val dynamicColor: Boolean = true,
@@ -90,18 +91,6 @@ data class AppSettings(
     fun ssidPrefixFor(brand: Brand): String = if (brand == Brand.Astro) astroSsidPrefix else ssidPrefix
 
     fun passwordFor(brand: Brand): String = if (brand == Brand.Astro) astroWifiPassword else wifiPassword
-
-    fun exportBitrateFactor(codec: ExportCodec): Float? = when (codec) {
-        ExportCodec.H264 -> exportBitrateFactorH264
-        ExportCodec.H265 -> exportBitrateFactorH265
-        ExportCodec.Original -> exportBitrateFactorOriginal
-    }
-
-    fun withExportBitrateFactor(codec: ExportCodec, factor: Float): AppSettings = when (codec) {
-        ExportCodec.H264 -> copy(exportBitrateFactorH264 = factor)
-        ExportCodec.H265 -> copy(exportBitrateFactorH265 = factor)
-        ExportCodec.Original -> copy(exportBitrateFactorOriginal = factor)
-    }
 }
 
 /** enum 存成名稱；讀不到或已不存在的值（例如改版拿掉的選項）退回 [default]。 */
@@ -133,9 +122,14 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val exportResolution = stringPreferencesKey("export_resolution")
         val exportQuality = stringPreferencesKey("export_quality")
         val exportMute = booleanPreferencesKey("export_mute")
-        val exportBitrateFactorH264 = floatPreferencesKey("export_bitrate_factor_h264")
-        val exportBitrateFactorH265 = floatPreferencesKey("export_bitrate_factor_h265")
-        val exportBitrateFactorOriginal = floatPreferencesKey("export_bitrate_factor_original")
+        val exportBitrateFactors = stringSetPreferencesKey("export_bitrate_factors_v2")
+
+        /** 改版前只依編碼記的倍數（混了不同解析度、畫質，不準），寫入時清掉。 */
+        val legacyBitrateFactors = listOf("h264", "h265", "original").map { floatPreferencesKey("export_bitrate_factor_$it") }
+
+        /** 還沒分來源容器的倍數：當時只匯出過 Mufu 的 TS，讀的時候轉成 TS 的 key，寫入時清掉。 */
+        val legacyBitrateFactorsV1 = stringSetPreferencesKey("export_bitrate_factors")
+
         val themeMode = stringPreferencesKey("theme_mode")
         val dynamicColor = booleanPreferencesKey("dynamic_color")
     }
@@ -173,9 +167,8 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
             exportResolution = enumOr(p[Keys.exportResolution], d.exportResolution),
             exportQuality = enumOr(p[Keys.exportQuality], d.exportQuality),
             exportMute = p[Keys.exportMute] ?: d.exportMute,
-            exportBitrateFactorH264 = p[Keys.exportBitrateFactorH264],
-            exportBitrateFactorH265 = p[Keys.exportBitrateFactorH265],
-            exportBitrateFactorOriginal = p[Keys.exportBitrateFactorOriginal],
+            exportBitrateFactors = p[Keys.exportBitrateFactors]?.let(::parseFactors)
+                ?: p[Keys.legacyBitrateFactorsV1]?.let { v1 -> migrateFactorsV1(parseFactors(v1)) }.orEmpty(),
             themeMode = enumOr(p[Keys.themeMode], d.themeMode),
             dynamicColor = p[Keys.dynamicColor] ?: d.dynamicColor,
         )
@@ -201,10 +194,21 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         p[Keys.exportResolution] = s.exportResolution.name
         p[Keys.exportQuality] = s.exportQuality.name
         p[Keys.exportMute] = s.exportMute
-        s.exportBitrateFactorH264?.let { p[Keys.exportBitrateFactorH264] = it } ?: p.remove(Keys.exportBitrateFactorH264)
-        s.exportBitrateFactorH265?.let { p[Keys.exportBitrateFactorH265] = it } ?: p.remove(Keys.exportBitrateFactorH265)
-        s.exportBitrateFactorOriginal?.let { p[Keys.exportBitrateFactorOriginal] = it } ?: p.remove(Keys.exportBitrateFactorOriginal)
+        p[Keys.exportBitrateFactors] = s.exportBitrateFactors.map { (key, factor) -> "$key=$factor" }.toSet()
+        Keys.legacyBitrateFactors.forEach { p.remove(it) }
+        p.remove(Keys.legacyBitrateFactorsV1)
         p[Keys.themeMode] = s.themeMode.name
         p[Keys.dynamicColor] = s.dynamicColor
     }
 }
+
+/** 存成字串集合的倍數（`key=倍數`）讀回來；格式不對的略過。 */
+internal fun parseFactors(entries: Set<String>): Map<String, Float> =
+    entries.mapNotNull { e ->
+        val i = e.lastIndexOf('=')
+        val factor = e.substring(i + 1).toFloatOrNull()
+        if (i <= 0 || factor == null) null else e.substring(0, i) to factor
+    }.toMap()
+
+/** 還沒分來源容器的倍數（`H264|1440|Standard`、`Original`）：當時都是 Mufu 的 TS，補上 `|TS`。 */
+internal fun migrateFactorsV1(old: Map<String, Float>): Map<String, Float> = old.mapKeys { (key, _) -> "$key|TS" }

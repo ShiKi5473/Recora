@@ -191,7 +191,8 @@ fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMute
         optionLabel = { it.label },
         onSelect = { c -> update { it.copy(exportCodec = c) } },
         hint = when {
-            !reencode -> "直接複製記錄器的 H.265 畫面：畫質、檔案大小都跟原檔一樣，匯出很快；有些裝置或網站播不了 H.265"
+            !reencode -> "直接複製原本的畫面（Mufu 是 H.265、Astro 是 H.264）：畫質、檔案大小都跟原檔一樣，匯出很快；" +
+                "Mufu 的 H.265 有些裝置或網站播不了"
             hevc -> "H.264 相容性最好；H.265 檔案較小，但有些裝置或網站播不了；「不重新編碼」畫質最好、最快"
             else -> "這支手機沒有 H.265 編碼器，重新編碼只能用 H.264；「不重新編碼」畫質最好、最快"
         },

@@ -32,7 +32,7 @@ class FileNamesTest {
 
     @Test
     fun parsesAstroNames() {
-        // 實測：Astro App 存到 Movies/astoramily 的檔名
+        // 實測：Astro App 存到 Movies/astroFamily 的檔名
         val a = FileNames.parse("20260814081925_002902F.MP4")!!
         assertEquals(Camera.Front, a.camera)
         assertEquals("MP4", a.ext)

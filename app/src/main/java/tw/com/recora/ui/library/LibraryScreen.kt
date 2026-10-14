@@ -114,7 +114,7 @@ import java.time.format.DateTimeFormatter
 private val EDIT_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("MM/dd HH:mm")
 
 /**
- * 相簿：列 Movies/Recora、Pictures/Recora（相容舊版的 Dashcam、MufuDashcam）與「相簿資料夾」勾選的資料夾（預設含 Astro App 的 Movies/astoramily），分成未剪輯（依拍攝時間）、
+ * 相簿：列 Movies/Recora、Pictures/Recora（相容舊版的 Dashcam、MufuDashcam）與「相簿資料夾」勾選的資料夾（預設含 Astro App 的 Movies/astroFamily），分成未剪輯（依拍攝時間）、
  * 已剪輯（依剪輯時間）、照片，最新的在最上面並依日期分組；可切換列表／格狀。
  * 長按進入多選，可整批刪除或分享。
  */

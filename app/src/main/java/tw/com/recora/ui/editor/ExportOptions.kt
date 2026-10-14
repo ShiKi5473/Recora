@@ -53,13 +53,33 @@ object ExportOptions {
         ((videoBitrate * factor.toDouble() + audioBitrate) * durationMs.coerceAtLeast(0) / 8_000.0 * CONTAINER_OVERHEAD).roundToLong()
 
     /**
-     * 從一次匯出的結果算出編碼器實際輸出／要求的影像位元率。實測小米的 H.264 編碼器固定多出約 24%，
-     * 只靠公式會低估。太短的片段誤差大，不採用（回 null）。
+     * 從一次匯出的結果算出編碼器實際輸出／要求的影像位元率。編碼器常常超出要求，超出多少依設定而不同
+     * （見 [factorKey]），只靠公式會低估。太短的片段誤差大，不採用（回 null）。
      */
     fun measuredFactor(fileBytes: Long, durationMs: Long, videoBitrate: Int, audioBitrate: Int): Float? {
         if (durationMs < MIN_LEARN_MS || videoBitrate <= 0 || fileBytes <= 0) return null
         val totalBps = fileBytes * 8_000.0 / durationMs / CONTAINER_OVERHEAD
         return ((totalBps - audioBitrate) / videoBitrate).toFloat().coerceIn(0.3f, 3f)
+    }
+
+    /**
+     * 倍數依匯出設定與來源容器（[container]，副檔名，例如 TS、MP4）分開記：
+     * - 同一個編碼器，要求的位元率越低超出越多（實測小米 H.264：1440p 標準 ×1.24、1080p 省空間 ×1.93）。
+     * - 不重新編碼時，Mufu 的 TS 多一路 360p 子串流（複製後只剩約 0.85 倍），Astro 與官方 App 的 MP4 則幾乎不變；
+     *   來源畫質不同（Astro 是 2～12 Mbps 的 H.264），重新編碼時超出的比例也可能不同。
+     */
+    fun factorKey(codec: ExportCodec, outputHeight: Int, quality: ExportQuality, container: String): String =
+        if (codec == ExportCodec.Original) "${codec.name}|$container" else "${codec.name}|$outputHeight|${quality.name}|$container"
+
+    /** 這個設定學到的倍數；沒匯出過的話借用同編碼、同畫質、同容器其他解析度的平均，都沒有回 null。 */
+    fun lookupFactor(factors: Map<String, Float>, key: String): Float? {
+        factors[key]?.let { return it }
+        val parts = key.split('|')
+        if (parts.size != 4) return null
+        val similar = factors.filterKeys { k ->
+            k.split('|').let { it.size == 4 && it[0] == parts[0] && it[2] == parts[2] && it[3] == parts[3] }
+        }.values
+        return if (similar.isEmpty()) null else similar.average().toFloat()
     }
 
     /** 新的實測倍數併進之前的（各占一半，平均掉畫面內容的差異）；之前沒有就直接用新的。 */

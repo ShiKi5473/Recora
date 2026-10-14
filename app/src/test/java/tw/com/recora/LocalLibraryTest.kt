@@ -131,7 +131,7 @@ class LocalLibraryTest {
 
     @Test
     fun astroMp4IsOriginal() {
-        val m = build("20260814081925_002902F.MP4", "Movies/astoramily/")!!
+        val m = build("20260814081925_002902F.MP4", "Movies/astroFamily/")!!
         assertEquals(MediaKind.Original, m.kind)
         assertEquals(LocalDateTime.of(2026, 8, 14, 8, 19, 25), m.time)
         assertEquals(Camera.Front, m.camera)
@@ -150,7 +150,7 @@ class LocalLibraryTest {
         val shot = build(LocalLibrary.screenshotName("20260814081925_002902F.MP4", 15_000), "Pictures/MufuDashcam/")!!
         assertEquals(LocalDateTime.of(2026, 8, 14, 8, 19, 40), shot.time)
 
-        val source = build("20260814081925_002902F.MP4", "Movies/astoramily/")!!
+        val source = build("20260814081925_002902F.MP4", "Movies/astroFamily/")!!
         assertEquals(listOf(source), LocalLibrary.editedOriginals(listOf(edited, source)))
     }
 
@@ -159,20 +159,20 @@ class LocalLibraryTest {
         assertEquals(Brand.Mufu, build("EMER260923-184436F.TS", "Movies/MufuDashcam/")!!.brand)
         assertEquals(Brand.Mufu, build("FILE260924-091146F_1m02s5-1m30s0.mp4", "Movies/MufuDashcam/")!!.brand)
         assertEquals(Brand.Mufu, build("IMG260923-162041F.JPG", "Pictures/MufuDashcam/")!!.brand)
-        assertEquals(Brand.Astro, build("20260814081925_002902F.MP4", "Movies/astoramily/")!!.brand)
+        assertEquals(Brand.Astro, build("20260814081925_002902F.MP4", "Movies/astroFamily/")!!.brand)
         assertEquals(Brand.Astro, build("20260814081925_002902F_0m10s0-0m15s0.mp4", "Movies/MufuDashcam/")!!.brand)
         assertEquals(Brand.Astro, build("20260814081925_002902F_0m15s0.jpg", "Pictures/MufuDashcam/")!!.brand)
         // 看不出來源：原始檔看資料夾，剪輯檔、照片歸「其它」
         assertEquals(Brand.Mufu, build("clip.TS", "Movies/MufuDashcam/")!!.brand)
-        assertEquals(Brand.Astro, build("renamed.MP4", "Movies/astoramily/")!!.brand)
+        assertEquals(Brand.Astro, build("renamed.MP4", "Movies/astroFamily/")!!.brand)
         assertEquals(Brand.Other, build("my-clip.mp4", "Movies/MufuDashcam/")!!.brand)
         assertEquals(Brand.Other, build("photo.jpg", "Pictures/MufuDashcam/")!!.brand)
     }
 
     @Test
     fun astroAdjacentSegment() {
-        val a = build("20260814081925_002902F.MP4", "Movies/astoramily/")!!
-        val b = build("20260814082024_002903F.MP4", "Movies/astoramily/")!!
+        val a = build("20260814081925_002902F.MP4", "Movies/astroFamily/")!!
+        val b = build("20260814082024_002903F.MP4", "Movies/astroFamily/")!!
         assertEquals(b, LocalLibrary.adjacent(listOf(a, b), a.name, forward = true))
         assertEquals(a, LocalLibrary.adjacent(listOf(a, b), b.name, forward = false))
     }
@@ -212,7 +212,7 @@ class LocalLibraryTest {
         assertEquals(MediaKind.Edited, edited.kind)
         // 子資料夾也算；取消勾選 Astro 的資料夾後就不讀
         assertEquals(MediaKind.Original, LocalLibrary.build("u", "a.mp4", "DCIM/Camera/sub/", 1, 1, added, null, zone, folders = folders)!!.kind)
-        assertNull(LocalLibrary.build("u", "20260814081925_002902F.MP4", "Movies/astoramily/", 1, 1, added, null, zone, folders = emptySet()))
+        assertNull(LocalLibrary.build("u", "20260814081925_002902F.MP4", "Movies/astroFamily/", 1, 1, added, null, zone, folders = emptySet()))
         // 手機相機拍的影片不會被當成可以清掉的舊原始檔
         assertEquals(emptyList<Any>(), LocalLibrary.originalsRecordedBefore(listOf(video), LocalDateTime.of(2030, 1, 1, 0, 0)))
     }
@@ -317,7 +317,7 @@ class LocalLibraryTest {
         )
         assertEquals(MediaKind.Edited, m!!.kind)
         assertNull(LocalLibrary.build("content://x/v", "my-clip.mp4", "Movies/行車紀錄/", 1, 1000, 0, null, zone, folders = emptySet()))
-        assertEquals(setOf("Movies/astoramily/"), LocalLibrary.extraFolders(setOf("Movies/astoramily/", "Movies/行車紀錄/"), "行車紀錄"))
+        assertEquals(setOf("Movies/astroFamily/"), LocalLibrary.extraFolders(setOf("Movies/astroFamily/", "Movies/行車紀錄/"), "行車紀錄"))
     }
 
     @Test
@@ -330,8 +330,16 @@ class LocalLibraryTest {
 
     @Test
     fun extraFoldersDropsAppFolders() {
-        val saved = setOf("Movies/astoramily/", "Movies/MufuDashcam/", "Pictures/Dashcam/緊急/", "Movies/Recora/")
-        assertEquals(setOf("Movies/astoramily/"), LocalLibrary.extraFolders(saved))
+        val saved = setOf("Movies/astroFamily/", "Movies/MufuDashcam/", "Pictures/Dashcam/緊急/", "Movies/Recora/")
+        assertEquals(setOf("Movies/astroFamily/"), LocalLibrary.extraFolders(saved))
+    }
+
+    @Test
+    fun misspelledAstroFolderIsFixed() {
+        // 舊版預設寫成 astoramily（手機上不存在），存在設定裡的換成實機上的 astroFamily
+        assertEquals(setOf("Movies/astroFamily/", "Movies/LINE/"), LocalLibrary.extraFolders(setOf("Movies/astoramily/", "Movies/LINE/")))
+        assertEquals(setOf("Movies/astroFamily/"), LocalLibrary.extraFolders(setOf("Movies/astoramily/", "Movies/astroFamily/")))
+        assertEquals(setOf("Movies/astroFamily/"), LocalLibrary.DEFAULT_FOLDERS)
     }
 
     @Test
