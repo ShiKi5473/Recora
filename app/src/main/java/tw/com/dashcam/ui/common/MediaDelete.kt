@@ -96,6 +96,7 @@ private suspend fun deleteLocal(container: AppContainer, item: PlayItem): Outcom
 private suspend fun deleteOnDashcam(container: AppContainer, item: PlayItem): Outcome {
     val sdPath = item.sdPath ?: return Outcome.Failed("不知道 ${item.title} 在記錄器上的位置")
     if (!container.connection.isConnected) return Outcome.Failed("沒有連線到記錄器")
+    if (container.files.find(sdPath)?.readOnly == true) return Outcome.Failed("${item.title} 是受保護（唯讀）的緊急錄影，不刪除")
     return try {
         val result = container.api.delete(sdPath)
         if (result.ok) {

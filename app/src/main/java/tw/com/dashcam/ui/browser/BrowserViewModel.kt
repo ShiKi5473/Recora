@@ -69,7 +69,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
             if (!folderPicked) _ui.update { it.copy(folder = start) }
             c.connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
                 if (connected) {
-                    load()
+                    if (mayLoadInBackground()) load()
                 } else {
                     loadJob?.cancel()
                     _ui.update { it.copy(clips = emptyList(), selection = emptySet(), loading = false, error = null) }
@@ -86,8 +86,23 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch { c.libraryChanged.collect { refreshDownloaded() } }
         // 在播放器刪掉記錄器上的檔案、或格式化記憶卡後，列表要跟著更新（快取已由對方更新）
         viewModelScope.launch {
-            c.dashcamChanged.collect { if (c.connection.isConnected) load() }
+            c.dashcamChanged.collect { if (c.connection.isConnected && mayLoadInBackground()) load() }
         }
+    }
+
+    /** 「檔案」頁現在看得到（回到前景、停在這個分頁）。 */
+    private var visible = false
+
+    /**
+     * 沒在看這一頁時要不要讀列表：Astro 讀列表要先停錄，只有在看檔案時才讀（「檔案」頁拿著停錄的租約）；
+     * MUFU 連線時本來就不錄影，連上就先讀進快取。
+     */
+    private fun mayLoadInBackground(): Boolean = visible || !c.api.listingStopsRecording
+
+    /** 「檔案」頁出現或離開；出現時（已連線、還沒有這個資料夾的列表）補讀。 */
+    fun setVisible(value: Boolean) {
+        visible = value
+        if (value && c.connection.isConnected && !_ui.value.loading) load()
     }
 
     fun selectFolder(folder: Folder) {
@@ -190,10 +205,16 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(working = true) }
             var failed = 0
+            var protectedCount = 0
             val deleted = ArrayList<String>()
             for (clip in clips) {
                 var clipOk = true
                 for (f in Clips.filesToDelete(clip, includeRear)) {
+                    // 唯讀的緊急錄影：官方 App 也不刪
+                    if (f.readOnly) {
+                        protectedCount++
+                        continue
+                    }
                     // 推算出來的後鏡頭檔不一定存在，刪除失敗不算錯
                     val ok = try {
                         c.api.delete(f.sdPath).ok
@@ -207,7 +228,8 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
             }
             _ui.update { it.copy(working = false, selection = emptySet()) }
             val done = clips.size - failed
-            _messages.trySend(if (failed == 0) "已刪除 $done 段" else "已刪除 $done 段，$failed 段失敗")
+            val skipped = if (protectedCount > 0) "；受保護（唯讀）的緊急錄影略過 $protectedCount 個檔案" else ""
+            _messages.trySend((if (failed == 0) "已刪除 $done 段" else "已刪除 $done 段，$failed 段失敗") + skipped)
             c.files.forget(deleted)
             load()
         }

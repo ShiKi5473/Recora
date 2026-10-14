@@ -13,6 +13,9 @@ object DashcamConfig {
     /** 本機下載資料夾（Movies/ 或 Pictures/ 底下）。 */
     const val LOCAL_DIR = "Dashcam"
 
+    /** 改名前的本機資料夾（舊下載還在這裡，相簿與已下載判斷仍要讀）。 */
+    const val LEGACY_LOCAL_DIR = "MufuDashcam"
+
     /** Astro LEO3（Novatek，ASTRO_LEO3_API.md）。 */
     const val ASTRO_HOST = "192.168.1.254"
     const val ASTRO_SSID_PREFIX = "Astrofamily_"

@@ -112,19 +112,21 @@ class AstroSession(
     }
 
     /**
-     * 剛連上：不知道記錄器在哪個模式，也可能是上次停錄中途斷線留下的。沒有人要用檔案、記錄器又沒在錄影時，
-     * 切回錄影模式並開始錄影（安全網，記錄器不能因為手機連過就停著不錄）。
+     * 剛連上（安全網，記錄器不能因為手機連過就停著不錄）：記錄器沒在錄影時——可能是「檔案」頁已經搶先停錄，
+     * 也可能是上次停錄中途斷線留下的——一律記成由我們負責恢復錄影；沒有人要用檔案就馬上恢復。
+     *
+     * 不在這裡清狀態（斷線時 [reset] 過了）：狀態是連線後馬上發出的，「檔案」頁可能比這裡早停錄，
+     * 清掉 [stoppedByUs] 就不會再開始錄影。
      */
     suspend fun onConnected() {
-        reset()
         mutex.withLock {
-            if (synchronized(this) { holders > 0 }) return
             if (commands.isRecording()) {
-                mode = Mode.Movie
+                if (mode == Mode.Unknown) mode = Mode.Movie
                 return
             }
-            DiagLog.log("記錄器沒有在錄影：切回錄影模式並開始錄影")
             stoppedByUs = true
+            if (synchronized(this) { holders > 0 }) return
+            DiagLog.log("記錄器沒有在錄影：切回錄影模式並開始錄影")
             restoreLocked()
         }
     }

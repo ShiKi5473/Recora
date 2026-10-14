@@ -73,6 +73,9 @@ class DashcamFiles(
         }
     }
 
+    /** 只看快取、不向記錄器讀；還沒讀過回 null。 */
+    fun cached(folder: Folder): List<DashcamFile>? = cache[folder]
+
     /** 從快取找記錄器上的檔案（例如在播放畫面加入下載）；那個資料夾還沒讀過就回 null。 */
     fun find(sdPath: String): DashcamFile? =
         cache.values.firstNotNullOfOrNull { list -> list.firstOrNull { it.sdPath == sdPath } }

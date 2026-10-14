@@ -290,4 +290,24 @@ class LocalLibraryTest {
         val c = build("FILE260923-235959F.TS", "Movies/MufuDashcam/")!!
         assertEquals(listOf(b, c, a), LocalLibrary.sorted(listOf(a, b, c)))
     }
+
+    @Test
+    fun appFoldersIncludeLegacyEvenWhenNotInExtraFolders() {
+        assertEquals(listOf("Movies/Dashcam/", "Movies/MufuDashcam/"), LocalLibrary.appDirs(false))
+        assertEquals(listOf("Pictures/Dashcam/", "Pictures/MufuDashcam/"), LocalLibrary.appDirs(true))
+        // 取消勾選（folders 為空）也一定讀舊資料夾
+        val m = LocalLibrary.build("content://x/v", "FILE260924-091146F.TS", "Movies/MufuDashcam/", 1, 1000, 0, null, zone, folders = emptySet())
+        assertEquals(MediaKind.Original, m!!.kind)
+    }
+
+    @Test
+    fun extraFoldersDropsAppFolders() {
+        val saved = setOf("Movies/astoramily/", "Movies/MufuDashcam/", "Pictures/Dashcam/緊急/")
+        assertEquals(setOf("Movies/astoramily/"), LocalLibrary.extraFolders(saved))
+    }
+
+    @Test
+    fun unknownMp4InAppFoldersIsEdited() {
+        assertEquals(MediaKind.Edited, build("my-clip.mp4", "Movies/Dashcam/")!!.kind)
+    }
 }

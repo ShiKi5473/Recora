@@ -55,6 +55,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import tw.com.dashcam.AppContainer
 import tw.com.dashcam.data.Camera
+import tw.com.dashcam.data.api.ignoreIo
 import tw.com.dashcam.data.net.ConnState
 import tw.com.dashcam.ui.common.ConnectionChip
 import tw.com.dashcam.ui.common.MessagePane
@@ -226,12 +227,4 @@ private fun LiveVideo(player: ExoPlayer, modifier: Modifier) {
         },
         modifier = modifier,
     )
-}
-
-private suspend fun ignoreIo(block: suspend () -> Unit) {
-    try {
-        block()
-    } catch (e: IOException) {
-        // 預覽控制指令失敗不影響播放
-    }
 }

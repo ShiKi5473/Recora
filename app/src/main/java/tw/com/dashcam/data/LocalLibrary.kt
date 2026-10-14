@@ -40,7 +40,7 @@ data class LocalMedia(
 )
 
 /**
- * 相簿收 App 自己的資料夾（Movies/MufuDashcam、Pictures/MufuDashcam，一定會讀），以及使用者在設定勾選的資料夾
+ * 相簿收 App 自己的資料夾（Movies/Dashcam、Pictures/Dashcam 與改版前的 MufuDashcam，一定會讀），以及使用者在設定勾選的資料夾
  * （預設 [DEFAULT_FOLDERS]）；依檔名分成未剪輯／已剪輯／照片，並決定每個檔案的時間。
  * 剪輯檔名對應 [tw.com.dashcam.ui.editor.EditorScreen] 的輸出：
  * 已剪輯 `<原檔名>_0m10s0-0m15s0[_靜音].mp4`、截圖 `<原檔名>_0m15s0.jpg`。
@@ -51,8 +51,18 @@ object LocalLibrary {
     private val MOVIES = "Movies/${DashcamConfig.LOCAL_DIR}/"
     private val PICTURES = "Pictures/${DashcamConfig.LOCAL_DIR}/"
 
-    /** 相簿預設也讀的資料夾：Astro 記錄器 App（com.ligo.aAstroCam）存原始影片的地方，以及改版前存的舊資料夾。 */
-    val DEFAULT_FOLDERS: Set<String> = setOf("Movies/astoramily/", "Movies/MufuDashcam/", "Pictures/MufuDashcam/")
+    private val LEGACY_MOVIES = "Movies/${DashcamConfig.LEGACY_LOCAL_DIR}/"
+    private val LEGACY_PICTURES = "Pictures/${DashcamConfig.LEGACY_LOCAL_DIR}/"
+
+    /** 相簿預設也讀的資料夾：Astro 記錄器 App（com.ligo.aAstroCam）存原始影片的地方。 */
+    val DEFAULT_FOLDERS: Set<String> = setOf("Movies/astoramily/")
+
+    /** App 自己的資料夾（新的與改版前的舊資料夾）：一定會讀，不受「相簿資料夾」勾選影響。 */
+    fun appDirs(isImage: Boolean): List<String> =
+        if (isImage) listOf(PICTURES, LEGACY_PICTURES) else listOf(MOVIES, LEGACY_MOVIES)
+
+    /** 設定裡存的相簿資料夾去掉 App 自己的（一定會讀，不需要也不該出現在勾選清單）。 */
+    fun extraFolders(saved: Collection<String>): Set<String> = saved.filterNot(::isAppFolder).toSet()
 
     /** 認得的資料夾 → 記錄器種類（檔名看不出種類時用）。 */
     private val FOLDER_BRANDS = mapOf("Movies/astoramily/" to Brand.Astro)
@@ -67,10 +77,8 @@ object LocalLibrary {
 
     /** App 自己的資料夾（含子資料夾，以及改版前的舊資料夾）：下載與匯出都放這裡，相簿一定會讀。 */
     fun isAppFolder(relativePath: String): Boolean =
-        relativePath.startsWith(MOVIES, ignoreCase = true) ||
-            relativePath.startsWith(PICTURES, ignoreCase = true) ||
-            relativePath.startsWith("Movies/MufuDashcam/", ignoreCase = true) ||
-            relativePath.startsWith("Pictures/MufuDashcam/", ignoreCase = true)
+        appDirs(false).any { relativePath.startsWith(it, ignoreCase = true) } ||
+            appDirs(true).any { relativePath.startsWith(it, ignoreCase = true) }
 
     /** App 自己的資料夾或 [folders] 裡（含子資料夾）。 */
     fun isIncluded(relativePath: String, folders: Collection<String>): Boolean =
@@ -120,8 +128,7 @@ object LocalLibrary {
             )
         }
         val info = FileNames.parse(name)
-        val inAppMovies = relativePath.startsWith(MOVIES, ignoreCase = true) ||
-            relativePath.startsWith("Movies/MufuDashcam/", ignoreCase = true)
+        val inAppMovies = appDirs(false).any { relativePath.startsWith(it, ignoreCase = true) }
         // App 資料夾裡看不出來源的 MP4：本 App 匯出、後來改過名的剪輯
         if (info == null && inAppMovies && FileNames.extension(name) == "MP4") {
             return LocalMedia(uri, name, MediaKind.Edited, added, sizeBytes, durationMs)

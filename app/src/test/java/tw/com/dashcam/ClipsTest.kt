@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tw.com.dashcam.data.Brand
 import tw.com.dashcam.data.Clip
 import tw.com.dashcam.data.Clips
 import tw.com.dashcam.data.DashcamFile
@@ -148,5 +149,11 @@ class ClipsTest {
             ),
         )
         assertEquals(listOf("FILE260923-000059", "FILE260922-235959"), clips.map { it.key })
+    }
+
+    @Test
+    fun guessedRearKeepsFrontBrand() {
+        val front = DashcamFile("a.TS", "/mnt/mmc/Video/F/FILE260923-131459F.TS", 100, "", Folder.Normal, brand = Brand.Astro)
+        assertEquals(Brand.Astro, Clips.group(listOf(front)).single().rear!!.brand)
     }
 }

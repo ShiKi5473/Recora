@@ -40,7 +40,7 @@ class MediaStoreSink(
             subdir?.let { "$it/" }.orEmpty()
 
     /** 相簿要讀的資料夾：App 的資料夾，加上使用者勾選的（例如 Astro App 的 Movies/astoramily）。 */
-    private fun libraryDirs(isImage: Boolean): List<String> = listOf(relativePath(isImage)) + libraryFolders()
+    private fun libraryDirs(isImage: Boolean): List<String> = LocalLibrary.appDirs(isImage) + libraryFolders()
 
     private fun collection(isImage: Boolean): Uri =
         if (isImage) {
@@ -106,7 +106,7 @@ class MediaStoreSink(
     fun saveFile(source: File, displayName: String, mime: String, isImage: Boolean): Uri =
         writeNew(displayName, mime, isImage) { out -> source.inputStream().use { it.copyTo(out, 256 * 1024) } }
 
-    /** 把截圖存成 JPEG 放進 Pictures/MufuDashcam。 */
+    /** 把截圖存成 JPEG 放進 Pictures/Dashcam。 */
     fun saveJpeg(bitmap: Bitmap, displayName: String): Uri =
         writeNew(displayName, "image/jpeg", isImage = true) { out ->
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)) throw IOException("無法存成 JPEG")
@@ -118,7 +118,7 @@ class MediaStoreSink(
             .map { it.copy(size = runCatching { currentSize(it.uri) }.getOrDefault(it.size)) }
 
     /**
-     * 相簿分頁：Movies/MufuDashcam 與 Pictures/MufuDashcam（含子資料夾），以及使用者勾選的資料夾，排除下載中的 pending 檔案。
+     * 相簿分頁：Movies/Dashcam 與 Pictures/Dashcam（含子資料夾與改版前的 MufuDashcam），以及使用者勾選的資料夾，排除下載中的 pending 檔案。
      * 沒有媒體讀取權限時只看得到本 App 建立的檔案。
      */
     fun listLibrary(): List<LocalMedia> {
@@ -126,7 +126,7 @@ class MediaStoreSink(
         val folders = libraryFolders()
         for (isImage in listOf(false, true)) {
             val base = collection(isImage)
-            val (selection, selectionArgs) = inDirs(listOf(relativePath(isImage)) + folders)
+            val (selection, selectionArgs) = inDirs(LocalLibrary.appDirs(isImage) + folders)
             val args = Bundle().apply {
                 putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
                 putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)

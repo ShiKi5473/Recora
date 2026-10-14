@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +45,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import tw.com.dashcam.AppContainer
 import tw.com.dashcam.data.PlayItem
+import tw.com.dashcam.data.api.Lease
 
 /**
  * 全螢幕看照片（記錄器上的網址或手機上的 content://），左右滑動切換同一清單的其他照片。
@@ -58,8 +60,8 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
     val pager = rememberPagerState(initialPage = startIndex.coerceIn(photos.indices)) { items.size }
     // 看記錄器上的照片時維持檔案模式（Astro 要停錄；MUFU 沒有動作）
     val fromDashcam = photos.any { it.sdPath != null }
-    androidx.compose.runtime.DisposableEffect(fromDashcam) {
-        val lease = if (fromDashcam) container.api.holdFiles("看照片") else tw.com.dashcam.data.api.Lease.NONE
+    DisposableEffect(fromDashcam) {
+        val lease = if (fromDashcam) container.api.holdFiles("看照片") else Lease.NONE
         onDispose { lease.close() }
     }
     var pendingDelete by remember { mutableStateOf<PlayItem?>(null) }

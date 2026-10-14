@@ -263,6 +263,13 @@ private fun StorageSummary(ui: DeviceUi, onRefresh: () -> Unit) {
             }
         }
     }
+    if (ui.usage?.isEmpty() == true && !ui.usageLoading) {
+        Text(
+            "還沒讀過檔案列表：先到「檔案」頁，或按下方「重新計算容量」（Astro 讀列表時會暫停錄影）。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     if (ui.usageLoading) {
         Text("計算各類錄影佔用中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     } else {

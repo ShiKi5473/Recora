@@ -2,6 +2,7 @@ package tw.com.dashcam.data.api
 
 import android.net.Network
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -21,10 +22,9 @@ import tw.com.dashcam.data.PathStyle
 import tw.com.dashcam.data.SettingDef
 import tw.com.dashcam.data.SettingDefs
 import tw.com.dashcam.data.SettingsStore
-import tw.com.dashcam.data.net.RouteGuard
+import tw.com.dashcam.data.net.await
 import java.io.IOException
 import java.time.ZonedDateTime
-import java.util.concurrent.TimeUnit
 
 /** MUFU V60P 的 HTTP 介面（MUFU_V60P_API.md §2、§3）。 */
 class MufuApi(
@@ -34,8 +34,8 @@ class MufuApi(
     override val brand: Brand get() = Brand.Mufu
 
     override val host: String get() = settings.state.value.hostFor(Brand.Mufu)
-    private val hostName: String get() = host.substringBefore(':')
-    private val port: Int get() = host.substringAfter(':', "80").toIntOrNull() ?: 80
+    private val hostName: String get() = hostNameOf(host)
+    private val port: Int get() = portOf(host)
 
     /** 本次執行已確認可用的下載路徑樣式。 */
     @Volatile
@@ -51,7 +51,7 @@ class MufuApi(
             val query = url.substringAfter('?')
             val request = Request.Builder().url(url).build()
             try {
-                httpClient.newCall(request).execute().use { resp ->
+                httpClient.newCall(request).await().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     // dir / reardir 的 XML 很長，由 listFolder 記摘要
                     if (params.none { it.first == "action" && it.second.endsWith("dir") }) {
@@ -72,20 +72,13 @@ class MufuApi(
      * 記錄器是單核心且邊錄影邊跑 CGI 腳本，逾時給寬一點。
      */
     override suspend fun probe(network: Network?): DashcamApi.ProbeResult = withContext(Dispatchers.IO) {
-        val probeClient = client.newBuilder()
-            // 探測本來就發生在綁定之前：走的是指定網路（或測試模式的預設網路），不需要 RouteGuard
-            .apply { interceptors().removeAll { it is RouteGuard } }
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .callTimeout(15, TimeUnit.SECONDS)
-            .apply { if (network != null) socketFactory(network.socketFactory) }
-            .build()
+        val probeClient = probeClient(client, network)
         val request = Request.Builder()
             .url(cgiUrl(listOf("action" to "get", "property" to "devinfo.fwver")))
             .build()
         val started = System.nanoTime()
         try {
-            probeClient.newCall(request).execute().use { resp ->
+            probeClient.newCall(request).await().use { resp ->
                 DashcamApi.ProbeResult(true, "HTTP ${resp.code}，${(System.nanoTime() - started) / 1_000_000} ms")
             }
         } catch (e: IOException) {
@@ -249,7 +242,7 @@ class MufuApi(
     /** 只要 1 byte 的 GET（GoAhead 不一定支援 HEAD）。 */
     private suspend fun rangeProbe(url: String): Int = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).header("Range", "bytes=0-0").build()
-        client.newCall(request).execute().use { it.code }
+        client.newCall(request).await().use { it.code }
     }
 
     fun rtspUrl(path: String): String = "rtsp://$hostName:${DashcamConfig.RTSP_PORT}/liveRTSP/$path"
@@ -288,7 +281,7 @@ class MufuApi(
         var last: String? = null
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            kotlinx.coroutines.delay(2000)
+            delay(2000)
             last = try {
                 getProperties("Camera.Menu.*")["Camera.Menu.$key"]
             } catch (e: IOException) {
@@ -321,7 +314,7 @@ class MufuApi(
         ignoreIo { streamStatusOn() }
         ignoreIo { streamerStart() }
         ignoreIo { setPreviewCamera(camera) }
-        kotlinx.coroutines.delay(800)
+        delay(800)
         return DashcamApi.LiveSource(rtspUrl(livePath(camera)), forceTcp = true)
     }
 
@@ -360,7 +353,7 @@ class MufuApi(
     override suspend fun formatCard(onProgress: (String) -> Unit): String {
         val result = sendFormat()
         DiagLog.log("格式化記憶卡：${DiagLog.compact(result.body)}")
-        kotlinx.coroutines.delay(2000)
+        delay(2000)
         var last: String? = null
         var sawBusy = false
         val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
@@ -373,20 +366,12 @@ class MufuApi(
             onProgress(last ?: "等待記錄器回應…")
             if (last != null && !last.equals("READY", ignoreCase = true)) sawBusy = true
             if (last.equals("READY", ignoreCase = true) && (sawBusy || isCardEmpty())) break
-            kotlinx.coroutines.delay(1000)
+            delay(1000)
         }
         return if (last.equals("READY", ignoreCase = true)) {
             "格式化完成，記憶卡已清空"
         } else {
             "已送出格式化，但記錄器目前狀態為 ${last ?: "無回應"}，請稍後確認"
-        }
-    }
-
-    private suspend fun ignoreIo(block: suspend () -> Unit) {
-        try {
-            block()
-        } catch (e: IOException) {
-            // 預覽控制指令失敗不影響播放
         }
     }
 

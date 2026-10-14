@@ -76,6 +76,7 @@ import tw.com.dashcam.data.PlayItem
 import tw.com.dashcam.data.DashcamFile
 import tw.com.dashcam.data.DownloadChoice
 import tw.com.dashcam.data.Folder
+import tw.com.dashcam.data.api.Lease
 import tw.com.dashcam.data.net.ConnState
 import tw.com.dashcam.ui.Formats
 import tw.com.dashcam.ui.common.ConnectionChip
@@ -106,10 +107,14 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
         onPauseOrDispose { }
     }
     // Astro：「檔案」頁可見時維持停錄＋檔案模式，離開約 10 秒後自動恢復錄影（MUFU 沒有動作）
-    val connectedNow = conn is tw.com.dashcam.data.net.ConnState.Connected
+    val connectedNow = conn is ConnState.Connected
     LifecycleResumeEffect(connectedNow) {
-        val lease = if (connectedNow) container.api.holdFiles("檔案頁") else tw.com.dashcam.data.api.Lease.NONE
-        onPauseOrDispose { lease.close() }
+        val lease = if (connectedNow) container.api.holdFiles("檔案頁") else Lease.NONE
+        vm.setVisible(true)
+        onPauseOrDispose {
+            vm.setVisible(false)
+            lease.close()
+        }
     }
 
     // 畫面上的片段（套用「未下載」篩選），依日期分組

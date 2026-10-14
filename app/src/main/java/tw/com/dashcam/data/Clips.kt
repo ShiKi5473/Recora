@@ -16,6 +16,8 @@ data class DashcamFile(
     val folder: Folder,
     val guessed: Boolean = false,
     val brand: Brand = Brand.Mufu,
+    /** 記錄器標成唯讀（Astro 的緊急錄影 ATTR 33）：官方 App 刪除時會略過。 */
+    val readOnly: Boolean = false,
 ) {
     val info: FileNames.Info? = FileNames.parse(name)
     val camera: Camera? get() = FileNames.cameraOf(sdPath)
@@ -93,7 +95,7 @@ object Clips {
             var rear = list.firstOrNull { it.camera == Camera.Rear }
             if (rear == null && !listsRear && front != null) {
                 rear = FileNames.rearPathOf(front.sdPath)?.let { p ->
-                    DashcamFile(FileNames.basename(p), p, -1, front.time, front.folder, guessed = true)
+                    DashcamFile(FileNames.basename(p), p, -1, front.time, front.folder, guessed = true, brand = front.brand)
                 }
             }
             Clip(key, front, rear)

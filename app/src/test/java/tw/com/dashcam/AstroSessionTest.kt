@@ -114,6 +114,35 @@ class AstroSessionTest {
     }
 
     @Test
+    fun filesPageStoppingBeforeOnConnectedStillRestartsRecording() = runTest {
+        // 連線狀態一發出，「檔案」頁就停錄；對時等指令之後 onConnected 才跑，不能忘記是我們停的
+        val fake = Fake(recording = true)
+        val s = session(fake)
+        val lease = s.hold("檔案頁")
+        runCurrent()
+        s.onConnected()
+        assertEquals(listOf("stop", "playback"), fake.sent)
+        lease.close()
+        advanceUntilIdle()
+        assertEquals(listOf("stop", "playback", "movie", "start"), fake.sent)
+    }
+
+    @Test
+    fun idleDashcamAtConnectStartsRecordingAfterFilesReleased() = runTest {
+        // 上次中途斷線留下沒在錄影的記錄器，連上時「檔案」頁拿著租約：用完要開始錄影
+        val fake = Fake(recording = false)
+        val s = session(fake)
+        val lease = s.hold("檔案頁")
+        s.onConnected()
+        runCurrent()
+        assertTrue("start" !in fake.sent)
+        lease.close()
+        advanceUntilIdle()
+        assertEquals("start", fake.sent.last())
+        assertTrue(fake.recording)
+    }
+
+    @Test
     fun changingSettingsStopsInMovieModeButRefusesWhileFilesInUse() = runTest {
         val fake = Fake(recording = true)
         val s = session(fake)

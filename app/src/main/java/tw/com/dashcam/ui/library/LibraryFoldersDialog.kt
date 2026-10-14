@@ -64,7 +64,7 @@ fun LibraryFoldersDialog(container: AppContainer, onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "一定會讀 Movies/${DashcamConfig.LOCAL_DIR} 與 Pictures/${DashcamConfig.LOCAL_DIR}（下載與匯出都存在那裡）。" +
+                    "一定會讀 Movies/${DashcamConfig.LOCAL_DIR} 與 Pictures/${DashcamConfig.LOCAL_DIR}（下載與匯出都存在那裡，改版前的 ${DashcamConfig.LEGACY_LOCAL_DIR} 也一樣）。" +
                         "另外勾選要一起顯示的資料夾（含子資料夾），檔案依檔名分到未剪輯／已剪輯／照片。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

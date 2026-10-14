@@ -19,7 +19,7 @@ import java.util.concurrent.Executors
  * （這支手機的 logcat 只留得住幾秒，事後讀不到）。
  */
 object DiagLog {
-    private const val TAG = "MufuDiag"
+    private const val TAG = "DashcamDiag"
     private const val MAX_LINES = 150
     private const val KEEP_DAYS = 7L
     private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")

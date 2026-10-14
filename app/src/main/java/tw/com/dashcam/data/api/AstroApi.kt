@@ -20,11 +20,10 @@ import tw.com.dashcam.data.FileNames
 import tw.com.dashcam.data.Folder
 import tw.com.dashcam.data.SettingDef
 import tw.com.dashcam.data.SettingsStore
-import tw.com.dashcam.data.net.RouteGuard
+import tw.com.dashcam.data.net.await
 import tw.com.dashcam.ui.Formats
 import java.io.IOException
 import java.time.ZonedDateTime
-import java.util.concurrent.TimeUnit
 
 /**
  * Astro LEO3（Novatek NT96560）的 HTTP 介面（ASTRO_LEO3_API.md）。
@@ -43,8 +42,8 @@ class AstroApi(
     override val brand: Brand get() = Brand.Astro
 
     override val host: String get() = hostProvider()
-    private val hostName: String get() = host.substringBefore(':')
-    private val port: Int get() = host.substringAfter(':', "80").toIntOrNull() ?: 80
+    private val hostName: String get() = hostNameOf(host)
+    private val port: Int get() = portOf(host)
 
     /** 記錄器拒絕了指令（Status 不是 0）。 */
     class RejectedException(val cmd: Int, val status: Int?) : IOException("記錄器拒絕指令 $cmd（Status $status）")
@@ -52,11 +51,23 @@ class AstroApi(
     val session = AstroSession(scope, object : AstroSession.Commands {
         override suspend fun isRecording(): Boolean = isRecordingNow()
         override suspend fun stopRecording() = require(command(CMD_RECORD, par = "0"))
-        override suspend fun startRecording() = startRecordingWithRetry()
+        override suspend fun startRecording() {
+            startRecordingWithRetry()
+            onRecordingResumed()
+        }
         override suspend fun enterPlayback() = require(command(CMD_MODE, par = MODE_PLAYBACK))
         override suspend fun enterMovie() = require(command(CMD_MODE, par = MODE_MOVIE))
     })
 
+    /** 重新開始錄影之後呼叫：記錄器上會多出新檔案、循環錄影也會刪掉最舊的，已讀過的列表要作廢。 */
+    @Volatile
+    var onRecordingResumed: () -> Unit = {}
+
+    override val listingStopsRecording: Boolean get() = true
+
+    override val disconnectTimeoutMs: Long get() = 8_000L
+
+    @Volatile
     private var keepAlive: Job? = null
 
     /** 這次連線讀過的 2019／3031／3030（連線期間不會變）。 */
@@ -81,7 +92,7 @@ class AstroApi(
             val url = commandUrl(cmd, par, str)
             val query = url.substringAfter('?')
             try {
-                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                client.newCall(Request.Builder().url(url).build()).await().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     if (!quiet || !resp.isSuccessful) DiagLog.log("→ $query ⇒ HTTP ${resp.code}: ${DiagLog.compact(body)}")
                     if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
@@ -124,17 +135,10 @@ class AstroApi(
 
     /** 3012 回應要是 Novatek 的 XML 才算：192.168.1.254 也常是家用路由器的位址。 */
     override suspend fun probe(network: Network?): DashcamApi.ProbeResult = withContext(Dispatchers.IO) {
-        val probeClient = client.newBuilder()
-            // 探測本來就發生在綁定之前：走的是指定網路（或測試模式的預設網路），不需要 RouteGuard
-            .apply { interceptors().removeAll { it is RouteGuard } }
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .callTimeout(15, TimeUnit.SECONDS)
-            .apply { if (network != null) socketFactory(network.socketFactory) }
-            .build()
+        val probeClient = probeClient(client, network)
         val started = System.nanoTime()
         try {
-            probeClient.newCall(Request.Builder().url(commandUrl(CMD_VERSION)).build()).execute().use { resp ->
+            probeClient.newCall(Request.Builder().url(commandUrl(CMD_VERSION)).build()).await().use { resp ->
                 val body = resp.body?.string().orEmpty()
                 val ms = (System.nanoTime() - started) / 1_000_000
                 val reply = NovatekParsers.parseReply(body)
@@ -160,17 +164,18 @@ class AstroApi(
         menu = null
         sizes = null
         startKeepAlive()
+        // 先確認錄影狀態：「檔案」頁可能已經停錄，晚一步就多一段競態的時間窗
+        try {
+            session.onConnected()
+        } catch (e: IOException) {
+            DiagLog.log("確認錄影狀態失敗：${e.message}")
+        }
         for (cmd in listOf(CMD_DEVICE_INFO, CMD_STATUS)) {
             try {
                 DiagLog.detail("cmd=$cmd 全文：${raw(cmd, quiet = true)}")
             } catch (e: IOException) {
                 // 只是紀錄
             }
-        }
-        try {
-            session.onConnected()
-        } catch (e: IOException) {
-            DiagLog.log("確認錄影狀態失敗：${e.message}")
         }
     }
 
@@ -186,8 +191,7 @@ class AstroApi(
     }
 
     private fun startKeepAlive() {
-        stopKeepAlive()
-        keepAlive = scope.launch {
+        val job = scope.launch {
             while (isActive) {
                 delay(KEEP_ALIVE_MS)
                 try {
@@ -197,11 +201,17 @@ class AstroApi(
                 }
             }
         }
+        synchronized(this) {
+            keepAlive?.cancel()
+            keepAlive = job
+        }
     }
 
     private fun stopKeepAlive() {
-        keepAlive?.cancel()
-        keepAlive = null
+        synchronized(this) {
+            keepAlive?.cancel()
+            keepAlive = null
+        }
     }
 
     override suspend fun syncTime(now: ZonedDateTime): DashcamApi.SetResult {
@@ -215,7 +225,7 @@ class AstroApi(
         val entries = NovatekParsers.parseFileList(raw(CMD_FILE_LIST, quiet = true))
         val files = entries.map { e ->
             val path = NovatekParsers.sdPathOf(e.fpath)
-            DashcamFile(e.name, path, e.size, e.time, NovatekParsers.folderOf(path), brand = Brand.Astro)
+            DashcamFile(e.name, path, e.size, e.time, NovatekParsers.folderOf(path), brand = Brand.Astro, readOnly = ((e.attr ?: 0) and 1) != 0)
         }
         val byFolder = Folder.entries.associateWith { f -> files.filter { it.folder == f } }
         DiagLog.log("列表（3015）：共 ${files.size} 個檔案（" + byFolder.entries.joinToString("、") { "${it.key.label} ${it.value.size}" } + "）")
@@ -236,7 +246,7 @@ class AstroApi(
     override suspend fun resolveUrl(sdPath: String): String? = withFiles {
         val url = httpUrl(sdPath)
         val code = withContext(Dispatchers.IO) {
-            client.newCall(Request.Builder().url(url).header("Range", "bytes=0-0").build()).execute().use { it.code }
+            client.newCall(Request.Builder().url(url).header("Range", "bytes=0-0").build()).await().use { it.code }
         }
         DiagLog.log("下載網址 $sdPath ⇒ HTTP $code${if (code == 200) "（沒有回 206，可能不支援續傳）" else ""}")
         if (code == 200 || code == 206) url else null
@@ -356,31 +366,33 @@ class AstroApi(
     }
 
     /** 3010&par=1（Novatek 慣例，從未在實機上執行過）：送出後等記憶卡狀態回到正常、列表變空。 */
-    override suspend fun formatCard(onProgress: (String) -> Unit): String {
-        val reply = session.withRecordingStopped { command(CMD_FORMAT, par = "1") }
-        DiagLog.log("格式化記憶卡：Status ${reply.status}")
-        if (!reply.ok) return "記錄器拒絕格式化（Status ${reply.status}）"
-        val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            delay(2000)
-            val card = try {
-                cardStatus()
-            } catch (e: IOException) {
-                null // 格式化期間記錄器可能暫時不回應
-            }
-            onProgress(card ?: "等待記錄器回應…")
-            if (card == "正常") {
-                val left = try {
-                    listAll().values.sumOf { it.size }
+    override suspend fun formatCard(onProgress: (String) -> Unit): String =
+        // 整段等待都在「停錄」裡：閒置計時不會在格式化進行中恢復錄影
+        session.withRecordingStopped {
+            val reply = command(CMD_FORMAT, par = "1")
+            DiagLog.log("格式化記憶卡：Status ${reply.status}")
+            if (!reply.ok) return@withRecordingStopped "記錄器拒絕格式化（Status ${reply.status}）"
+            val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                delay(2000)
+                val card = try {
+                    cardStatus()
                 } catch (e: IOException) {
-                    -1
+                    null // 格式化期間記錄器可能暫時不回應
                 }
-                if (left == 0) return "格式化完成，記憶卡已清空"
-                if (left > 0) onProgress("記憶卡上還有 $left 個檔案…")
+                onProgress(card ?: "等待記錄器回應…")
+                if (card == "正常") {
+                    val left = try {
+                        listAll().values.sumOf { it.size }
+                    } catch (e: IOException) {
+                        -1
+                    }
+                    if (left == 0) return@withRecordingStopped "格式化完成，記憶卡已清空"
+                    if (left > 0) onProgress("記憶卡上還有 $left 個檔案…")
+                }
             }
+            "已送出格式化，但還沒確認完成，請稍後重新整理檔案列表確認"
         }
-        return "已送出格式化，但還沒確認完成，請稍後重新整理檔案列表確認"
-    }
 
     companion object {
         const val CMD_RECORD = 2001

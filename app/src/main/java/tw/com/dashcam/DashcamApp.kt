@@ -5,19 +5,19 @@ import android.os.Build
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.VideoFrameDecoder
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import tw.com.dashcam.data.MediaKind
-import tw.com.dashcam.data.PlayItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import tw.com.dashcam.data.Brand
 import tw.com.dashcam.data.DashcamFiles
 import tw.com.dashcam.data.DiagLog
+import tw.com.dashcam.data.MediaKind
+import tw.com.dashcam.data.PlayItem
 import tw.com.dashcam.data.SettingsStore
-import tw.com.dashcam.data.Brand
 import tw.com.dashcam.data.api.AstroApi
 import tw.com.dashcam.data.api.DashcamApi
 import tw.com.dashcam.data.api.MufuApi
@@ -79,10 +79,10 @@ class AppContainer(val app: Application) {
         .addInterceptor(RouteGuard { connection.canReachDashcam })
         .build()
 
-    private val mufu = MufuApi(http, settings)
     private val astro = AstroApi(http, settings, appScope)
-    private fun apiOf(brand: Brand): DashcamApi = if (brand == Brand.Astro) astro else mufu
-    val connection = DashcamConnection(app, mapOf(Brand.Mufu to mufu, Brand.Astro to astro), settings, appScope)
+    private val apis: Map<Brand, DashcamApi> = mapOf(Brand.Mufu to MufuApi(http, settings), Brand.Astro to astro)
+    private fun apiOf(brand: Brand): DashcamApi = apis[brand] ?: apis.getValue(Brand.Mufu)
+    val connection = DashcamConnection(app, apis, settings, appScope)
 
     /**
      * 目前的記錄器介面：連著的那一種，否則連線卡片選的。每次使用時才取，
@@ -90,7 +90,7 @@ class AppContainer(val app: Application) {
      */
     val api: DashcamApi get() = apiOf(connection.currentBrand)
 
-    val files = DashcamFiles({ api }, connection, appScope)
+    val files = DashcamFiles({ api }, connection, appScope).also { astro.onRecordingResumed = it::invalidateAll }
     val sink = MediaStoreSink(app) { settings.state.value.libraryFolders }
     val downloads = DownloadRepository(
         app, ::apiOf, sink, http, appScope,

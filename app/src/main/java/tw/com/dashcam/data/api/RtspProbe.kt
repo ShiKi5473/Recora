@@ -21,7 +21,7 @@ object RtspProbe {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress(host, port), 4000)
                 socket.soTimeout = 4000
-                val request = "DESCRIBE $url RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\nUser-Agent: MufuDashcam\r\n\r\n"
+                val request = "DESCRIBE $url RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\nUser-Agent: Dashcam\r\n\r\n"
                 socket.getOutputStream().apply { write(request.toByteArray()); flush() }
                 val text = readResponse(socket)
                 val status = text.lineSequence().firstOrNull().orEmpty()

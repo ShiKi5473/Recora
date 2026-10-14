@@ -100,9 +100,15 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             }
             _ui.update { it.copy(storage = storage) }
             val usage = LinkedHashMap<Folder, Pair<Int, Long>>()
+            // Astro 讀列表要先停錄：自動讀取只用「檔案」頁已經讀過的，按「重新計算容量」才向記錄器讀
+            val cacheOnly = c.api.listingStopsRecording && !refresh
             for (folder in Folder.entries) {
                 try {
-                    val files = c.files.list(folder, refresh).lastOrNull().orEmpty()
+                    val files = if (cacheOnly) {
+                        c.files.cached(folder) ?: continue
+                    } else {
+                        c.files.list(folder, refresh).lastOrNull().orEmpty()
+                    }
                     usage[folder] = files.size to files.sumOf { it.size.coerceAtLeast(0) }
                     _ui.update { it.copy(usage = LinkedHashMap(usage)) }
                 } catch (e: IOException) {

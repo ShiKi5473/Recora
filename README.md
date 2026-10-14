@@ -84,6 +84,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 release 版也是用 debug 金鑰（`%USERPROFILE%\.android\debug.keystore`）簽署。換電腦或金鑰重建後，
 新版會無法覆蓋安裝，所以請備份這個檔案。
 
+## 從舊版（MUFU 記錄器，tw.com.mufudashcam）升級
+
+改名後 applicationId 變成 `tw.com.dashcam`，系統會把它當成另一個 App：
+
+1. 先記下舊 App 的 Wi-Fi 密碼等設定（設定、下載佇列不會帶過來），再**移除舊 App**，否則兩個 App 都會自動偵測並綁定記錄器、互搶連線。
+2. 安裝新 App，重新設定。
+3. 舊版下載的檔案（`Movies/MufuDashcam`、`Pictures/MufuDashcam`）相簿與「已下載」判斷仍然讀得到；刪除舊 App 建立的檔案時系統會要求確認。
+
+Astro：記錄器會在用檔案（檔案頁、下載、串流播放）時停錄，離開約 10 秒後自動恢復。若在這 10 秒內把 App 從最近工作清單滑掉，記錄器會停在回放模式，下次連上時 App 會補上錄影；沒有再連的話請手動重啟記錄器。
+
 ## 沒有記錄器時的開發測試
 
 `tools/mock_dashcam.py` 是假記錄器，模擬 Config.cgi（含 `dir` / `reardir`）和支援 Range 的檔案下載：

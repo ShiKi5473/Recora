@@ -175,7 +175,7 @@ class DashcamConnection(
         disconnectJob = scope.launch {
             if (wasConnected && brand != null) {
                 try {
-                    withTimeout(DISCONNECT_TIMEOUT_MS) { apiFor(brand).onDisconnecting() }
+                    withTimeout(apiFor(brand).disconnectTimeoutMs) { apiFor(brand).onDisconnecting() }
                 } catch (e: Exception) {
                     log("通知記錄器失敗：${e.message}") // 記錄器已經離線也沒關係
                 }
@@ -327,8 +327,6 @@ class DashcamConnection(
         const val PROBE_ATTEMPTS = 3
         const val PROBE_RETRY_DELAY_MS = 1500L
 
-        /** Astro 要切回錄影模式再開始錄影（各約 1 秒，被拒絕時還要重試），比 MUFU 的一個指令久。 */
-        const val DISCONNECT_TIMEOUT_MS = 8_000L
         const val VPN_BLOCKED_MESSAGE =
             "手機的 VPN（例如 AdGuard）擋住了記錄器連線。\n" +
                 "請在 VPN App 中把本 App 設為不經過 VPN，或暫停 VPN 後再連線。"

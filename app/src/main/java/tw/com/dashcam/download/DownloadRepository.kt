@@ -285,7 +285,13 @@ class DownloadRepository(
                 if (existing != null && existing.pending) {
                     existing.uri to existing.size
                 } else {
-                    if (existing != null) sink.delete(existing.uri) // 本機舊檔大小不符，重新下載
+                    if (existing != null) {
+                        // 本機舊檔大小不符，重新下載；改版前舊 App 建立的檔案刪不掉（SecurityException），留著並另存新檔
+                        try {
+                            sink.delete(existing.uri)
+                        } catch (e: SecurityException) {
+                        }
+                    }
                     sink.create(f.name, f.isImage, subdirOf(f)) to 0L
                 }
             }

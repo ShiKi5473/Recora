@@ -7,7 +7,11 @@ import tw.com.dashcam.data.Camera
 import tw.com.dashcam.data.DashcamFile
 import tw.com.dashcam.data.Folder
 import tw.com.dashcam.data.SettingDef
+import okhttp3.OkHttpClient
+import tw.com.dashcam.data.net.RouteGuard
+import java.io.IOException
 import java.time.ZonedDateTime
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -20,6 +24,12 @@ interface DashcamApi {
 
     /** 可能含埠號（debug 覆寫時，例如 127.0.0.1:8080）。 */
     val host: String
+
+    /** 讀檔案列表要先停錄（Astro）：沒在看檔案時不要自動讀。 */
+    val listingStopsRecording: Boolean get() = false
+
+    /** [onDisconnecting] 最多等多久，之後照樣解除綁定。 */
+    val disconnectTimeoutMs: Long get() = 3_000L
 
     data class SetResult(val ok: Boolean, val body: String)
 
@@ -123,5 +133,33 @@ class Lease(private val release: () -> Unit) : AutoCloseable {
 
     companion object {
         val NONE = Lease {}
+    }
+}
+
+/**
+ * 探測用的 client：探測本來就發生在綁定之前，走的是指定的 [network]（null = 目前預設網路，debug 測試模式），
+ * 不需要 RouteGuard；逾時給寬一點（記錄器是單核心，邊錄影邊回應）。
+ */
+internal fun probeClient(client: OkHttpClient, network: Network?): OkHttpClient =
+    client.newBuilder()
+        .apply { interceptors().removeAll { it is RouteGuard } }
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
+        .apply { if (network != null) socketFactory(network.socketFactory) }
+        .build()
+
+/** "127.0.0.1:8080" → 127.0.0.1 */
+internal fun hostNameOf(host: String): String = host.substringBefore(':')
+
+/** "127.0.0.1:8080" → 8080（沒有埠號為 80） */
+internal fun portOf(host: String): Int = host.substringAfter(':', "80").toIntOrNull() ?: 80
+
+/** 控制指令（預覽、離開時的收尾）失敗不影響主要功能。 */
+internal suspend fun ignoreIo(block: suspend () -> Unit) {
+    try {
+        block()
+    } catch (e: IOException) {
+        // 忽略
     }
 }

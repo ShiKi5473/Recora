@@ -140,7 +140,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
             hostOverride = p[Keys.hostOverride] ?: d.hostOverride,
             startFolder = enumOr(p[Keys.startFolder], d.startFolder),
             libraryGrid = p[Keys.libraryGrid] ?: d.libraryGrid,
-            libraryFolders = p[Keys.libraryFolders] ?: d.libraryFolders,
+            libraryFolders = p[Keys.libraryFolders]?.let(LocalLibrary::extraFolders) ?: d.libraryFolders,
             autoPlayNext = p[Keys.autoPlayNext] ?: d.autoPlayNext,
             screenshotVisibleArea = p[Keys.screenshotVisibleArea] ?: d.screenshotVisibleArea,
             exportCodec = enumOr(p[Keys.exportCodec], d.exportCodec),
