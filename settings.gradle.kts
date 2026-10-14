@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Dashcam"
+rootProject.name = "Recora"
 include(":app")

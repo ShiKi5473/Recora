@@ -1,22 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  錄刻 Recora 的圖示（依 docs/logo.png 描繪）：外圓、內圈、C 弧、R 字母與紅色錄影點。
+  原圖 2048 px 的圓心 (1023,1023) 對到 (54,54)，縮放 0.0587；R 的斜腳收在安全區（半徑 33）以內。
+  線條比原圖加粗一倍，縮成桌面圖示才看得清楚。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 記錄器機身 -->
+    <!-- 外圓 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M34,40h40a6,6 0,0 1,6 6v18a6,6 0,0 1,-6 6h-40a6,6 0,0 1,-6 -6v-18a6,6 0,0 1,6 -6z" />
-    <!-- 鏡頭 -->
+        android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52z"
+        android:strokeColor="#585755"
+        android:strokeWidth="2.2" />
+    <!-- 內圈：從 R 的直筆底部繞過左、上、右，停在斜腳 -->
     <path
-        android:fillColor="#1F3A5F"
-        android:pathData="M54,55m-11,0a11,11 0,1 1,22 0a11,11 0,1 1,-22 0" />
+        android:pathData="M54,74.7A20.7,20.7 0,1 1,69.86 67.31"
+        android:strokeColor="#585755"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.2" />
+    <!-- C 弧 -->
     <path
-        android:fillColor="#7FB3FF"
-        android:pathData="M54,55m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
-    <!-- 錄影指示燈 -->
+        android:pathData="M37.56,54A17.5,17.5 0,0 1,46.93 37.15"
+        android:strokeColor="#585755"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.2" />
+    <!-- R：直筆、上方的圓弧、斜腳 -->
     <path
-        android:fillColor="#FF5252"
-        android:pathData="M72,46m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+        android:pathData="M54,74.7V38.86H59.28A6.6,6.6 0,0 1,59.28 52.06H54M59.28,52.06L76.9,77.2"
+        android:strokeColor="#585755"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.2" />
+    <!-- 錄影點 -->
+    <path
+        android:fillColor="#9D4B51"
+        android:pathData="M60,68.56m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
 </vector>

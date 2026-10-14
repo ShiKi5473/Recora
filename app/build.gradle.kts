@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "tw.com.dashcam"
+    namespace = "tw.com.recora"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "tw.com.dashcam"
+        applicationId = "tw.com.recora"
         minSdk = 30
         targetSdk = 36
         versionCode = 1
