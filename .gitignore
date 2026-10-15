@@ -13,3 +13,6 @@ __pycache__/
 .kotlin/
 hs_err_pid*.log
 replay_pid*.log
+
+# 校正腳本的截圖與結果
+tools/calibration/out/

@@ -79,6 +79,14 @@ fun AppRoot(container: AppContainer) {
     val activeCount = tasks.count { it.isActive }
     val onPlay: (String, String) -> Unit = { url, title -> nav.navigate(playerRoute(url, title)) }
     val onEdit: (String, String) -> Unit = { uri, title -> nav.navigate(editorRoute(uri, title)) }
+    // debug：校正腳本指定的剪輯匯出；先關掉之前的剪輯畫面（釋放它的播放器），EditorScreen 自己接手這個工作
+    LaunchedEffect(Unit) {
+        container.calibrationJob.collect { job ->
+            if (job != null) {
+                nav.navigate(editorRoute(job.uri, job.title)) { popUpTo(nav.graph.findStartDestination().id) }
+            }
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0),

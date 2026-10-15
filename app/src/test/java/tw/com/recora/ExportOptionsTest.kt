@@ -69,6 +69,32 @@ class ExportOptionsTest {
     }
 
     @Test
+    fun complexityBitrateFollowsSourceRange() {
+        // 實測 Astro H.264 1440p 標準（要求 15.48 Mbps）：原檔這段 2.38 Mbps → 輸出 4.46（公式 +9%）；8.00 → 11.74（+12%）；
+        // 12.75 → 19.44，複雜的畫面停在要求的 1.25 倍
+        val h264 = ExportOptions.videoBitrate(2560, 1440, 30f, ExportCodec.H264, ExportQuality.Standard)
+        assertEquals(4_851_000.0, ExportOptions.complexityBitrate(h264, 2_380_000, ExportCodec.H264).toDouble(), 10_000.0)
+        assertEquals(13_169_000.0, ExportOptions.complexityBitrate(h264, 8_000_000, ExportCodec.H264).toDouble(), 10_000.0)
+        assertEquals((h264 * 1.25).toDouble(), ExportOptions.complexityBitrate(h264, 12_750_000, ExportCodec.H264).toDouble(), 1.0)
+        // H.265（要求 9.29 Mbps）：2.38 → 4.16（公式 +1%）；12.75 → 11.65（上限）
+        val h265 = ExportOptions.videoBitrate(2560, 1440, 30f, ExportCodec.H265, ExportQuality.Standard)
+        assertEquals(4_186_000.0, ExportOptions.complexityBitrate(h265, 2_380_000, ExportCodec.H265).toDouble(), 10_000.0)
+        assertEquals((h265 * 1.25).toDouble(), ExportOptions.complexityBitrate(h265, 12_750_000, ExportCodec.H265).toDouble(), 1.0)
+        // 縮小輸出時原檔的部分乘上像素比例的平方根（1440p → 1080p：0.5625 → 0.75）
+        assertEquals(10_650_000.0, ExportOptions.complexityBitrate(h265, 12_750_000, ExportCodec.H265, 0.5625).toDouble(), 10_000.0)
+    }
+
+    @Test
+    fun complexityCorrectionMovesSlowlyAndStaysBounded() {
+        // 從 1 開始，每次只吸收 2 成
+        assertEquals(1.04f, ExportOptions.mergeCorrection(null, 1.2f), 0.0001f)
+        assertEquals(0.94f, ExportOptions.mergeCorrection(1.0f, 0.7f), 0.0001f)
+        // 單一支極端的影片不會把倍數拉出 0.7～1.4
+        assertEquals(1.4f, ExportOptions.mergeCorrection(1.35f, 3f), 0f)
+        assertEquals(0.7f, ExportOptions.mergeCorrection(0.72f, 0.3f), 0f)
+    }
+
+    @Test
     fun originalUsesSourceBitrate() {
         // 不重新編碼：不要求編碼器位元率，預估用來源 TS 的平均位元率
         assertNull(ExportOptions.bitrate(2560, 1440, 30f, ExportCodec.Original, ExportQuality.High))
@@ -86,6 +112,9 @@ class ExportOptionsTest {
     fun factorsAreKeptPerSetting() {
         assertEquals("H264|1440|Standard|TS", ExportOptions.factorKey(ExportCodec.H264, 1440, ExportQuality.Standard, "TS"))
         assertEquals("Original|MP4", ExportOptions.factorKey(ExportCodec.Original, 1440, ExportQuality.Small, "MP4"))
+        // 畫面複雜度公式的修正倍數意思不同，跟舊的倍數分開記
+        assertEquals("H264|1440|Standard|MP4/src", ExportOptions.factorKey(ExportCodec.H264, 1440, ExportQuality.Standard, "MP4", complexity = true))
+        assertEquals("Original|MP4", ExportOptions.factorKey(ExportCodec.Original, 1440, ExportQuality.Small, "MP4", complexity = true))
         // 實測：同一個 H.264 編碼器，1080p 省空間超出得比 1440p 標準多很多，不能共用
         val factors = mapOf(
             "H264|1440|Standard|TS" to 1.24f, "H264|1080|Small|TS" to 1.93f, "H264|1440|Small|TS" to 1.25f, "Original|TS" to 0.85f,

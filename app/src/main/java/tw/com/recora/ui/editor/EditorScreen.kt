@@ -55,6 +55,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,6 +81,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import tw.com.recora.AppContainer
 import tw.com.recora.BuildConfig
 import tw.com.recora.data.AppSettings
@@ -217,11 +219,14 @@ fun EditorScreen(
 
     val startMs = range.start.roundToLong()
     val endMs = range.endInclusive.roundToLong()
-    // 不重新編碼時：量選取範圍內來源的實際資料量（拖曳範圍時等停下來才量；量好之前用整支檔案的平均估）
+    // 量選取範圍內來源的實際資料量（拖曳範圍時等停下來才量；量好之前用整支檔案的平均估）：
+    // 不重新編碼時就是要複製的資料；MP4 重新編碼時用它的位元率估畫面複雜度（見 ExportOptions.complexityBitrate）
     val copyMode = effectiveCodec(settings.exportCodec) == ExportCodec.Original
+    val complexitySource = FileNames.extension(segments.first().title) == "MP4"
     LaunchedEffect(copyMode, segments, startMs, endMs) {
         rangeBytes = null
-        if (!copyMode || endMs <= startMs) return@LaunchedEffect
+        // debug build 一律量：校正時用原檔這一段的位元率分析編碼器超量多少
+        if (!(copyMode || complexitySource || BuildConfig.DEBUG) || endMs <= startMs) return@LaunchedEffect
         delay(RANGE_MEASURE_DELAY_MS)
         val parts = EditPlan.pieces(segments.map { it.durationMs }, startMs, endMs).map { p ->
             SourceRangeBytes.measure(context, segments[p.segment].uri, p.startMs, p.endMs) ?: return@LaunchedEffect
@@ -343,13 +348,31 @@ fun EditorScreen(
         )
     }
 
-    /** 預估用的影像位元率（見 [ExportOptions.videoBitrate]）。 */
-    fun videoBitrate(s: AppSettings, spec: OutputSpec): Int =
+    /** 要求編碼器的影像位元率（見 [ExportOptions.videoBitrate]）；不重新編碼時是來源的平均位元率。 */
+    fun requestedVideoBitrate(s: AppSettings, spec: OutputSpec): Int =
         ExportOptions.videoBitrate(spec.width, spec.height, spec.fps, spec.codec, s.exportQuality, sourceBitrate)
+
+    /** 原檔這一段的影像位元率；還沒量好時用整支檔案的平均，都沒有回 null。 */
+    fun sourceRangeBitrate(): Int? =
+        rangeBytes?.let { ExportOptions.averageBitrate(it.video, endMs - startMs) } ?: sourceBitrate
+
+    /** 重新編碼 MP4（Astro 的 H.264）時用畫面複雜度預估（見 [ExportOptions.complexityBitrate]）。 */
+    fun usesComplexity(spec: OutputSpec): Boolean =
+        complexitySource && spec.codec != ExportCodec.Original && sourceRangeBitrate() != null
+
+    /** 預估用的影像位元率：要求的位元率，或依畫面複雜度預估的實際輸出。 */
+    fun videoBitrate(s: AppSettings, spec: OutputSpec): Int {
+        val requested = requestedVideoBitrate(s, spec)
+        val source = sourceRangeBitrate()
+        if (!usesComplexity(spec) || source == null) return requested
+        val video = player.videoSize
+        val pixelRatio = if (video.width > 0 && video.height > 0) spec.width.toDouble() * spec.height / (video.width * video.height) else 1.0
+        return ExportOptions.complexityBitrate(requested, source, spec.codec, pixelRatio)
+    }
 
     /** 預估倍數的 key（見 [ExportOptions.factorKey]）；來源容器看第一段的副檔名（接起來的段都是同一台記錄器）。 */
     fun factorKey(s: AppSettings, spec: OutputSpec): String =
-        ExportOptions.factorKey(spec.codec, spec.height, s.exportQuality, FileNames.extension(segments.first().title))
+        ExportOptions.factorKey(spec.codec, spec.height, s.exportQuality, FileNames.extension(segments.first().title), usesComplexity(spec))
 
     /** 匯出檔的聲音位元率；去除聲音或來源沒有聲音（例如後鏡頭）時是 0。 */
     fun audioBitrate(): Int {
@@ -381,7 +404,9 @@ fun EditorScreen(
         }
         // 匯出完用實際檔案大小校正預估（只看第一支：另一個鏡頭的解析度可能不同）
         val spec = outputSpec(container.settings.state.value)
-        val requestedVideoBps = videoBitrate(container.settings.state.value, spec)
+        val requestedVideoBps = requestedVideoBitrate(container.settings.state.value, spec)
+        val predictedVideoBps = videoBitrate(container.settings.state.value, spec)
+        val complexity = usesComplexity(spec)
         val factorKey = factorKey(container.settings.state.value, spec)
         val audioBps = audioBitrate()
         val clipMs = endMs - startMs
@@ -404,14 +429,14 @@ fun EditorScreen(
                         break
                     }
                     if (i == 0) {
-                        val measuredFactor = ExportOptions.measuredFactor(file.length(), clipMs, requestedVideoBps, audioBps)
+                        val measuredFactor = ExportOptions.measuredFactor(file.length(), clipMs, predictedVideoBps, audioBps)
                         // debug build：校正預估用，腳本從 logcat 收集（adb logcat -s RecoraExport）
                         if (BuildConfig.DEBUG) {
                             Log.i(
                                 "RecoraExport",
                                 "name=$name codec=${spec.codec} size=${spec.width}x${spec.height} " +
                                     "quality=${container.settings.state.value.exportQuality} mute=$removeAudio segments=${segments.size} " +
-                                    "clipMs=$clipMs estimate=$estimate rangeMeasured=${rangeBytes != null} actual=${file.length()} videoBps=$requestedVideoBps " +
+                                    "clipMs=$clipMs estimate=$estimate srcVideoBytes=${rangeBytes?.video} srcAudioBytes=${rangeBytes?.audio} actual=${file.length()} videoBps=$requestedVideoBps predictedBps=$predictedVideoBps " +
                                     "audioBps=$audioBps factorKey=$factorKey factorBefore=${container.settings.state.value.exportBitrateFactors[factorKey]} " +
                                     "measured=$measuredFactor tookMs=${SystemClock.elapsedRealtime() - startedAt}",
                             )
@@ -419,10 +444,9 @@ fun EditorScreen(
                         measuredFactor?.let { measured ->
                             container.appScope.launch {
                                 container.settings.update {
-                                    it.copy(
-                                        exportBitrateFactors = it.exportBitrateFactors +
-                                            (factorKey to ExportOptions.mergeFactor(it.exportBitrateFactors[factorKey], measured)),
-                                    )
+                                    val old = it.exportBitrateFactors[factorKey]
+                                    val merged = if (complexity) ExportOptions.mergeCorrection(old, measured) else ExportOptions.mergeFactor(old, measured)
+                                    it.copy(exportBitrateFactors = it.exportBitrateFactors + (factorKey to merged))
                                 }
                             }
                         }
@@ -449,6 +473,8 @@ fun EditorScreen(
                 confirmLeave = false
             }
             if (saved.isNotEmpty()) container.libraryChanged.tryEmit(Unit)
+            // debug：校正腳本等這一行（存檔完成後）才送下一支，太早關掉這個畫面會取消存檔
+            if (BuildConfig.DEBUG) Log.i("RecoraExport", "done saved=${saved.size} failure=$failure")
             val error = failure
             if (error != null) {
                 snackbar.showSnackbar(if (saved.isEmpty()) error else "已匯出 ${saved.joinToString("、")}；$error")
@@ -459,6 +485,31 @@ fun EditorScreen(
                     duration = SnackbarDuration.Long,
                 )
                 if (action == SnackbarResult.ActionPerformed) onOpenLibrary()
+            }
+        }
+    }
+
+    // debug：校正腳本指定的工作（見 MainActivity.handleCalibrationIntent）。設好範圍與去除聲音，
+    // 等播放器讀出規格、量完原檔這一段，再照手動按「匯出」的流程走，預估與量測才跟一般使用一樣
+    val calibration = remember { container.calibrationJob.value?.takeIf { BuildConfig.DEBUG && it.uri == uri } }
+    val currentExport by rememberUpdatedState<() -> Unit> { export() }
+    if (calibration != null) {
+        LaunchedEffect(calibration) {
+            container.calibrationJob.value = null
+            val ready = withTimeoutOrNull(CALIBRATION_TIMEOUT_MS) {
+                while (segments.sumOf { it.durationMs } <= 0) delay(100)
+                val total = segments.sumOf { it.durationMs }
+                val start = calibration.startMs.coerceIn(0L, total)
+                removeAudio = calibration.removeAudio
+                range = start.toFloat()..(start + calibration.lengthMs).coerceAtMost(total).toFloat()
+                rangeBytes = null
+                delay(RANGE_MEASURE_DELAY_MS) // 整支範圍的量測被取消之後才開始等
+                while (rangeBytes == null || sourceBitrate == null || player.videoSize.width <= 0) delay(100)
+            }
+            if (ready == null) {
+                Log.i("RecoraExport", "done saved=0 failure=逾時：讀不到 ${calibration.title} 的長度、規格或原檔資料量")
+            } else {
+                currentExport()
             }
         }
     }
@@ -698,8 +749,11 @@ private data class OutputSpec(val width: Int, val height: Int, val scaledHeight:
 
 private const val MIN_CLIP_MS = 500L
 
-/** 不重新編碼時，範圍停下來多久才量來源的資料量（TS 要掃檔，拖曳中不量）。 */
+/** 範圍停下來多久才量來源的資料量（TS 要掃檔，拖曳中不量）。 */
 private const val RANGE_MEASURE_DELAY_MS = 500L
+
+/** debug 校正：開剪輯畫面後等播放器與原檔資料量的上限。 */
+private const val CALIBRATION_TIMEOUT_MS = 60_000L
 
 /** 拖曳範圍時，預覽 seek 的最小間隔。 */
 private const val SCRUB_SEEK_INTERVAL_MS = 150L

@@ -3,6 +3,8 @@ package tw.com.recora
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -12,11 +14,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import tw.com.recora.data.AppSettings
 import tw.com.recora.data.DashcamConfig
 import tw.com.recora.data.ThemeMode
 import tw.com.recora.data.api.RtspProbe
+import tw.com.recora.data.enumOr
 import tw.com.recora.ui.AppRoot
+import tw.com.recora.ui.editor.CalibrationJob
 import tw.com.recora.ui.theme.RecoraTheme
 
 class MainActivity : ComponentActivity() {
@@ -69,6 +78,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (intent != null) handleCalibrationIntent(intent)
         val host = intent?.getStringExtra(EXTRA_HOST_OVERRIDE) ?: return
         lifecycleScope.launch {
             c.settings.update { it.copy(hostOverride = host.trim()) }
@@ -77,9 +87,64 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * debug 用：校正匯出檔案大小的預估（tools/calibration/calibrate.sh）。先改匯出設定，再開剪輯畫面匯出相簿裡的一支影片：
+     * `adb shell am start -n tw.com.recora/.MainActivity --es cal_codec H264 --es cal_res Original --es cal_quality Standard
+     *  --es cal_file 20261013090104_004646F.MP4 --el cal_start_ms 20000 --el cal_len_ms 30000 --ez cal_mute false`
+     * 設定值是 enum 名稱；沒有 cal_file 時只改設定。結果寫在 logcat tag RecoraExport。
+     */
+    private fun handleCalibrationIntent(intent: Intent) {
+        val c = (application as RecoraApp).container
+        val codec = intent.getStringExtra(EXTRA_CAL_CODEC)
+        val file = intent.getStringExtra(EXTRA_CAL_FILE)
+        if (codec == null && file == null) return
+        lifecycleScope.launch {
+            if (codec != null) {
+                var target: AppSettings? = null
+                c.settings.update {
+                    it.copy(
+                        exportCodec = enumOr(codec, it.exportCodec),
+                        exportResolution = enumOr(intent.getStringExtra(EXTRA_CAL_RES), it.exportResolution),
+                        exportQuality = enumOr(intent.getStringExtra(EXTRA_CAL_QUALITY), it.exportQuality),
+                    ).also { s -> target = s }
+                }
+                // 寫入後 state 要等 DataStore 發出新值才更新；等到了再記錄、再開剪輯畫面
+                val t = target ?: return@launch
+                val s = withTimeoutOrNull(5_000) {
+                    c.settings.state.first {
+                        it.exportCodec == t.exportCodec && it.exportResolution == t.exportResolution && it.exportQuality == t.exportQuality
+                    }
+                } ?: c.settings.state.value
+                Log.i(CAL_TAG, "settings codec=${s.exportCodec} res=${s.exportResolution} quality=${s.exportQuality}")
+            }
+            if (file == null) return@launch
+            val uri = withContext(Dispatchers.IO) { c.sink.findVideo(file) }
+            if (uri == null) {
+                Log.i(CAL_TAG, "done saved=0 failure=找不到 $file")
+                return@launch
+            }
+            c.calibrationJob.value = CalibrationJob(
+                id = SystemClock.elapsedRealtimeNanos(),
+                uri = uri.toString(),
+                title = file,
+                startMs = intent.getLongExtra(EXTRA_CAL_START_MS, 0L),
+                lengthMs = intent.getLongExtra(EXTRA_CAL_LEN_MS, 30_000L),
+                removeAudio = intent.getBooleanExtra(EXTRA_CAL_MUTE, false),
+            )
+        }
+    }
+
     private companion object {
         const val EXTRA_HOST_OVERRIDE = "host_override"
         const val EXTRA_PROBE_RTSP = "probe_rtsp"
+        const val EXTRA_CAL_FILE = "cal_file"
+        const val EXTRA_CAL_START_MS = "cal_start_ms"
+        const val EXTRA_CAL_LEN_MS = "cal_len_ms"
+        const val EXTRA_CAL_CODEC = "cal_codec"
+        const val EXTRA_CAL_RES = "cal_res"
+        const val EXTRA_CAL_QUALITY = "cal_quality"
+        const val EXTRA_CAL_MUTE = "cal_mute"
+        const val CAL_TAG = "RecoraExport"
 
         // 與 enableEdgeToEdge() 預設的導覽列遮罩相同
         val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)

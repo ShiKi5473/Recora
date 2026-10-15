@@ -3,8 +3,10 @@ package tw.com.recora.ui.editor
 import tw.com.recora.data.ExportCodec
 import tw.com.recora.data.ExportQuality
 import tw.com.recora.data.ExportResolution
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import kotlin.math.sqrt
 
 /** 匯出設定換算成 Transformer 的參數（純函式，方便測試）。 */
 object ExportOptions {
@@ -40,6 +42,24 @@ object ExportOptions {
             bitrate(width, height, fps, codec, quality) ?: (width.toDouble() * height * fps * DEFAULT_BITS_PER_PIXEL).roundToInt()
         }
 
+    /**
+     * 用畫面複雜度預估編碼器實際輸出的影像位元率（bps）= 固定的一小段 + 原檔這一段的位元率 [sourceRange] 的倍數 + 要求的位元率 [requested] 的一小部分，
+     * 最多到要求的 1.25 倍（編碼器的上限）。輸出像素較少時，原檔的部分乘上 [pixelRatio]（輸出 ÷ 原檔像素）的平方根，也就是長寬的比例
+     * （實測 1080p、720p 直接乘像素比例會低估約 20%）。
+     * Astro 的 H.264 MP4 每段畫面複雜度差很多，同一個要求實際輸出從 0.2 到 1.25 倍都有，幾乎完全跟著原檔這一段的位元率走；
+     * 簡單的畫面不管要求多少，輸出都差不多（H.265 標準與高畫質都約 4.2 Mbps），所以要求的位元率只占一小部分。
+     * 實測小米：H.264 47 支、H.265 55 支（1440p／1080p／720p，高／標準／省空間），均方根誤差各約 13%；
+     * 少數片段原檔位元率低、畫面卻複雜（例如前鏡頭），會低估到 −35%。
+     */
+    fun complexityBitrate(requested: Int, sourceRange: Int, codec: ExportCodec, pixelRatio: Double = 1.0): Int {
+        val w = if (codec == ExportCodec.H265) H265_WEIGHTS else H264_WEIGHTS
+        val predicted = w.base + sourceRange * sqrt(pixelRatio.coerceIn(0.0, 1.0)) * w.source + requested * w.requested
+        return min(predicted, requested * ENCODER_CAP).roundToInt()
+    }
+
+    /** [complexityBitrate] 的係數：固定 [base] bps、原檔的倍數 [source]、要求的位元率的倍數 [requested]。 */
+    private class ComplexityWeights(val base: Double, val source: Double, val requested: Double)
+
     /** 來源檔的平均位元率（bps）：總大小 ÷ 總長度；長度未知時回 null。 */
     fun averageBitrate(totalBytes: Long, totalDurationMs: Long): Int? =
         if (totalBytes <= 0 || totalDurationMs <= 0) null else (totalBytes * 8_000.0 / totalDurationMs).roundToInt()
@@ -74,9 +94,14 @@ object ExportOptions {
      * - 同一個編碼器，要求的位元率越低超出越多（實測小米 H.264：1440p 標準 ×1.24、1080p 省空間 ×1.93）。
      * - 不重新編碼時，Mufu 的 TS 多一路 360p 子串流（複製後只剩約 0.85 倍），Astro 與官方 App 的 MP4 則幾乎不變；
      *   來源畫質不同（Astro 是 2～12 Mbps 的 H.264），重新編碼時超出的比例也可能不同。
+     * - 用 [complexityBitrate] 預估時（[complexity]），記的是實際／公式的修正倍數，意思不同，key 的容器加上 `/src` 分開記。
      */
-    fun factorKey(codec: ExportCodec, outputHeight: Int, quality: ExportQuality, container: String): String =
-        if (codec == ExportCodec.Original) "${codec.name}|$container" else "${codec.name}|$outputHeight|${quality.name}|$container"
+    fun factorKey(codec: ExportCodec, outputHeight: Int, quality: ExportQuality, container: String, complexity: Boolean = false): String =
+        if (codec == ExportCodec.Original) {
+            "${codec.name}|$container"
+        } else {
+            "${codec.name}|$outputHeight|${quality.name}|$container${if (complexity) "/src" else ""}"
+        }
 
     /** 這個設定學到的倍數；沒匯出過的話借用同編碼、同畫質、同容器其他解析度的平均，都沒有回 null。 */
     fun lookupFactor(factors: Map<String, Float>, key: String): Float? {
@@ -92,6 +117,13 @@ object ExportOptions {
     /** 新的實測倍數併進之前的（各占一半，平均掉畫面內容的差異）；之前沒有就直接用新的。 */
     fun mergeFactor(old: Float?, measured: Float): Float = if (old == null) measured else (old + measured) / 2
 
+    /**
+     * [complexityBitrate] 的修正倍數：公式已經考慮畫面內容，從 1 開始、每次只吸收 2 成，並限制在 0.7～1.4，
+     * 免得被單一支影片洗掉（各占一半時，同一個設定的倍數在 0.58～1.17 之間跳）。
+     */
+    fun mergeCorrection(old: Float?, measured: Float): Float =
+        ((old ?: 1f) * (1 - CORRECTION_WEIGHT) + measured * CORRECTION_WEIGHT).coerceIn(MIN_CORRECTION, MAX_CORRECTION)
+
     /** 來源的聲音沒標位元率時的估計值：記錄器的 16 kHz AAC 實測約 32 kbps，匯出時直接沿用、不重新編碼。 */
     const val DEFAULT_AUDIO_BITRATE = 32_000
 
@@ -101,4 +133,13 @@ object ExportOptions {
     private const val DEFAULT_BITS_PER_PIXEL = 0.14
 
     private const val CONTAINER_OVERHEAD = 1.01
+
+    // [complexityBitrate]：各種解析度與畫質一起擬合（tools/calibration）
+    private val H264_WEIGHTS = ComplexityWeights(base = 400_000.0, source = 1.48, requested = 0.06)
+    private val H265_WEIGHTS = ComplexityWeights(base = 0.0, source = 0.90, requested = 0.22)
+    private const val ENCODER_CAP = 1.25
+
+    private const val CORRECTION_WEIGHT = 0.2f
+    private const val MIN_CORRECTION = 0.7f
+    private const val MAX_CORRECTION = 1.4f
 }

@@ -29,6 +29,7 @@ import tw.com.recora.download.EventBackup
 import tw.com.recora.download.MediaStoreSink
 import tw.com.recora.download.QueueStore
 import tw.com.recora.ui.common.MediaThumbFetcher
+import tw.com.recora.ui.editor.CalibrationJob
 import tw.com.recora.ui.editor.ClipExporter
 import java.io.File
 import java.io.IOException
@@ -114,6 +115,9 @@ class AppContainer(val app: Application) {
 
     /** 下一次打開相簿分頁時要顯示哪一類（例如匯出後跳到「已剪輯」）。 */
     val libraryTabRequest = MutableStateFlow<MediaKind?>(null)
+
+    /** debug 用：校正腳本指定的剪輯匯出，AppRoot 收到後開剪輯畫面（見 MainActivity.handleDebugIntent）。 */
+    val calibrationJob = MutableStateFlow<CalibrationJob?>(null)
 
     init {
         connection.onConnected = { dashcam ->
