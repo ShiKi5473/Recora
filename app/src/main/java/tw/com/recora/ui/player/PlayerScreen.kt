@@ -6,7 +6,16 @@ import android.view.View
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import android.os.SystemClock
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.geometry.Offset
+import androidx.media3.exoplayer.SeekParameters
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -150,6 +159,13 @@ fun PlayerScreen(
     }
     var isPlaying by remember { mutableStateOf(true) }
     var controlsVisible by remember { mutableStateOf(true) }
+    var durationMs by remember { mutableLongStateOf(0L) }
+    var buffering by remember { mutableStateOf(false) }
+    /** 底部控制列頂端的 Y（沒顯示時是最大值）：左右滑動、縮放平移的手勢不從這裡以下開始。 */
+    var controlsTopPx by remember { mutableFloatStateOf(Float.MAX_VALUE) }
+    var lastScrubSeekAt by remember { mutableLongStateOf(0L) }
+    /** 每次操作控制列加一，重新計算自動隱藏的時間。 */
+    var interactions by remember { mutableIntStateOf(0) }
     var loadJob by remember { mutableStateOf<Job?>(null) }
     var endHandled by remember { mutableStateOf(false) }
 
@@ -247,36 +263,9 @@ fun PlayerScreen(
         toast(if (added > 0) "已加入下載佇列，離開播放畫面後開始下載" else "這個檔案已在下載佇列中")
     }
 
-    // 控制列的上一段／下一段按鈕：與左右滑動相同（播放器裡只有一段，要自己接）
-    val jumpState = rememberUpdatedState(::jump)
-    val controls = remember(player) {
-        object : ForwardingPlayer(player) {
-            private fun hasPrevious() = index > 0
-            private fun hasNext() = index < queue.lastIndex
-
-            override fun getAvailableCommands(): Player.Commands =
-                super.getAvailableCommands().buildUpon().apply {
-                    if (hasPrevious()) add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                    if (hasNext()) addAll(Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                }.build()
-
-            override fun isCommandAvailable(command: Int): Boolean = when (command) {
-                Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> hasPrevious()
-                Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> hasNext()
-                else -> super.isCommandAvailable(command)
-            }
-
-            override fun hasPreviousMediaItem() = hasPrevious()
-            override fun hasNextMediaItem() = hasNext()
-            override fun seekToPreviousMediaItem() = jumpState.value(-1)
-            override fun seekToNextMediaItem() = jumpState.value(1)
-            override fun seekToNext() = jumpState.value(1)
-
-            override fun seekToPrevious() {
-                // 同 ExoPlayer：播了一段時間先回到開頭，否則換到上一段
-                if (!hasPrevious() || currentPosition > maxSeekToPreviousPosition) seekTo(0) else jumpState.value(-1)
-            }
-        }
+    /** 上一段：播了一段時間先回到開頭，否則換到上一段（同 ExoPlayer 內建控制列的行為）。 */
+    fun previousOrRestart() {
+        if (index <= 0 || player.currentPosition > RESTART_THRESHOLD_MS) player.seekTo(0) else jump(-1)
     }
 
     // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續
@@ -307,6 +296,7 @@ fun PlayerScreen(
             }
 
             override fun onPlaybackStateChanged(state: Int) {
+                buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_ENDED) onEndedState.value()
             }
 
@@ -334,10 +324,20 @@ fun PlayerScreen(
 
     // 實際錄影時間 = 這段的開始時間 + 播放位置
     var positionMs by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(player) {
+    val showControls = controlsVisible || !isPlaying
+    LaunchedEffect(player, showControls) {
         while (true) {
             positionMs = player.currentPosition
-            delay(500)
+            durationMs = player.duration.takeIf { it > 0 } ?: 0L
+            // 控制列顯示時更新密一點，進度條才順
+            delay(if (showControls) 200 else 500)
+        }
+    }
+    // 播放中、控制列顯示 3 秒沒有操作就自動收起；暫停時一直顯示
+    LaunchedEffect(controlsVisible, isPlaying, interactions) {
+        if (controlsVisible && isPlaying) {
+            delay(CONTROLS_HIDE_MS)
+            controlsVisible = false
         }
     }
     val startedAt = remember(current.title) { LocalLibrary.recordingStart(current.title) }
@@ -389,29 +389,25 @@ fun PlayerScreen(
     FullscreenEffect(fullscreen) { fullscreen = false }
     LightSystemBarIcons()
 
-    Box(Modifier.fillMaxSize().background(Color.Black).swipeToJump(enabled = { !zoom.isZoomed }, onJump = ::jump)) {
+    Box(Modifier.fillMaxSize().background(Color.Black).swipeToJump(enabled = { !zoom.isZoomed }, excluded = { p -> p.y > controlsTopPx }, onJump = ::jump)) {
         Box(
             (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().safeDrawingPadding())
-                // Initial：搶在 PlayerView 之前處理，捏合時不會順便切換控制列；下方進度條的拖曳不拿來平移
-                .zoomGestures(zoom, PointerEventPass.Initial) { pos, size -> pos.y > size.height * 0.75f },
+                // Initial：搶在其他手勢之前處理，捏合時不會順便切換控制列；控制列（進度條）上的拖曳不拿來平移
+                .zoomGestures(zoom, PointerEventPass.Initial) { pos, _ -> pos.y > controlsTopPx }
+                // 點一下影片顯示或收起控制列
+                .pointerInput(Unit) { detectTapGestures(onTap = { controlsVisible = !controlsVisible }) },
         ) {
             AndroidView(
                 factory = { ctx ->
                     // TextureView 版的 PlayerView 才能縮放影像（見 player_view_texture.xml）
                     (LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null) as PlayerView).apply {
-                        this.player = controls
-                        setShowSubtitleButton(false)
-                        // 設了監聽器，控制列才會出現全螢幕按鈕
-                        setFullscreenButtonClickListener { fullscreen = it }
-                        // 控制列出現時，上方的切換鈕也一起出現
-                        setControllerVisibilityListener(
-                            PlayerView.ControllerVisibilityListener { v -> controlsVisible = v == View.VISIBLE },
-                        )
+                        this.player = player
+                        // 控制列改由 Compose 畫（PlayerControls），這裡只負責影像
+                        useController = false
                         playerView = this
                     }
                 },
                 update = {
-                    it.setFullscreenButtonState(fullscreen)
                     // 只縮放影像本身，控制列維持原樣
                     it.videoSurfaceView?.apply {
                         scaleX = zoom.scale
@@ -424,6 +420,7 @@ fun PlayerScreen(
             )
         }
         Column(Modifier.fillMaxWidth().safeDrawingPadding()) {
+            AnimatedVisibility(visible = showControls, enter = fadeIn(), exit = fadeOut()) {
             if (fullscreen) {
                 Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     recordedAt?.let {
@@ -459,9 +456,11 @@ fun PlayerScreen(
                         }
                         if (queue.size > 1) {
                             Text(
-                                "${index + 1} / ${queue.size}　左右滑動切換・雙指放大",
+                                "${index + 1} / ${queue.size}　滑動切換・雙指放大",
                                 color = Color.White.copy(alpha = 0.7f),
                                 style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -484,30 +483,6 @@ fun PlayerScreen(
                     )
                 }
             }
-            // 控制列出現或暫停時：切換鏡頭、逐格、自動播下一段
-            if (controlsVisible || !isPlaying) {
-                FlowRow(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (FileNames.counterpartName(current.title) != null) {
-                        val toRear = FileNames.cameraOfName(current.title) != Camera.Rear
-                        OverlayChip(if (toRear) "切到後鏡頭" else "切到前鏡頭", Icons.Filled.Cameraswitch, onClick = ::switchCamera)
-                    }
-                    if (!isPlaying) {
-                        OverlayChip("上一格", Icons.AutoMirrored.Filled.KeyboardArrowLeft) { stepFrame(forward = false) }
-                        OverlayChip("下一格", Icons.AutoMirrored.Filled.KeyboardArrowRight) { stepFrame(forward = true) }
-                    }
-                    if (queue.size > 1) {
-                        OverlayChip(
-                            "自動播下一段",
-                            Icons.AutoMirrored.Filled.PlaylistPlay,
-                            selected = settings.autoPlayNext,
-                            onClick = ::toggleAutoPlay,
-                        )
-                    }
-                }
             }
             error?.let {
                 Text(
@@ -519,6 +494,61 @@ fun PlayerScreen(
                 )
             }
         }
+        AnimatedVisibility(
+            visible = showControls,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerControls(
+                isPlaying = isPlaying,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                hasPrevious = index > 0,
+                hasNext = index < queue.lastIndex,
+                switchCameraLabel = if (FileNames.counterpartName(current.title) != null) {
+                    if (FileNames.cameraOfName(current.title) != Camera.Rear) "切到後鏡頭" else "切到前鏡頭"
+                } else {
+                    null
+                },
+                showAutoPlay = queue.size > 1,
+                autoPlayNext = settings.autoPlayNext,
+                fullscreen = fullscreen,
+                onPlayPause = {
+                    interactions++
+                    if (player.isPlaying) {
+                        player.pause()
+                    } else {
+                        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+                        player.play()
+                    }
+                },
+                onPrevious = { interactions++; previousOrRestart() },
+                onNext = { interactions++; jump(1) },
+                onSeekPreview = { ms ->
+                    interactions++
+                    // 拖曳中只做節流的關鍵格 seek（串流的 TS 精準 seek 很慢），放開再精準 seek
+                    val now = SystemClock.uptimeMillis()
+                    if (now - lastScrubSeekAt >= SCRUB_SEEK_INTERVAL_MS) {
+                        lastScrubSeekAt = now
+                        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                        player.seekTo(ms)
+                    }
+                },
+                onSeekFinished = { ms ->
+                    player.setSeekParameters(SeekParameters.EXACT)
+                    player.seekTo(ms)
+                    positionMs = ms
+                },
+                onStepFrame = { forward -> interactions++; stepFrame(forward) },
+                onSwitchCamera = { interactions++; switchCamera() },
+                onToggleAutoPlay = { interactions++; toggleAutoPlay() },
+                onToggleFullscreen = { fullscreen = !fullscreen },
+                onTopChanged = { controlsTopPx = it },
+                modifier = Modifier.safeDrawingPadding(),
+            )
+        }
+        if (buffering) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
         pendingDelete?.let { item ->
             val local = isLocal(item)
             ConfirmDeleteDialog(
@@ -542,6 +572,15 @@ fun PlayerScreen(
         }
     }
 }
+
+/** 播了超過這麼久，「上一段」先回到開頭。 */
+private const val RESTART_THRESHOLD_MS = 3_000L
+
+/** 播放中沒操作多久後收起控制列。 */
+private const val CONTROLS_HIDE_MS = 3_000L
+
+/** 拖曳進度時 seek 的最短間隔。 */
+private const val SCRUB_SEEK_INTERVAL_MS = 200L
 
 private fun mediaItem(item: PlayItem): MediaItem = MediaItem.Builder().setUri(item.url).setMediaId(item.url).build()
 
@@ -592,10 +631,14 @@ private fun MoreMenu(
  * 從畫面下方 1/4（進度條所在）開始的拖曳不算，才不會跟拖曳進度條衝突。
  * 放大中（[enabled] 為 false）或用了兩根以上手指（捏合縮放）時不切換。
  */
-private fun Modifier.swipeToJump(enabled: () -> Boolean, onJump: (Int) -> Unit): Modifier = pointerInput(Unit) {
+private fun Modifier.swipeToJump(
+    enabled: () -> Boolean,
+    excluded: (Offset) -> Boolean,
+    onJump: (Int) -> Unit,
+): Modifier = pointerInput(Unit) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        if (down.position.y > size.height * 0.75f || !enabled()) return@awaitEachGesture
+        if (excluded(down.position) || !enabled()) return@awaitEachGesture
         var last = down.position
         var multiTouch = false
         while (true) {
