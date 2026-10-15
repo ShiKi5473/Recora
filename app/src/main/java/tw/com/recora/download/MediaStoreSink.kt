@@ -68,11 +68,14 @@ class MediaStoreSink(
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
             ?.uri
 
-    /** 已完成下載的檔案：大寫檔名 → 大小。包含相簿讀的所有資料夾（相容舊版與其他資料夾）。 */
-    fun downloaded(): Map<String, Long> =
+    /** 已完成下載的檔案：大寫檔名 → 檔案。包含相簿讀的所有資料夾（相容舊版與其他資料夾）。 */
+    fun downloadedEntries(): Map<String, Entry> =
         (query(false, null, null, MediaStore.MATCH_EXCLUDE, libraryDirs(false)) +
             query(true, null, null, MediaStore.MATCH_EXCLUDE, libraryDirs(true)))
-            .associate { it.name.uppercase() to it.size }
+            .associateBy { it.name.uppercase() }
+
+    /** 已完成下載的檔案：大寫檔名 → 大小。 */
+    fun downloaded(): Map<String, Long> = downloadedEntries().mapValues { it.value.size }
 
     fun create(name: String, isImage: Boolean, subdir: String? = null): Uri {
         val values = ContentValues().apply {

@@ -48,6 +48,7 @@ import androidx.compose.material3.Surface
 import tw.com.recora.ui.common.ConfirmDeleteDialog
 import tw.com.recora.ui.common.DateHeader
 import tw.com.recora.ui.common.MediaBadge
+import tw.com.recora.ui.common.MediaThumb
 import tw.com.recora.ui.common.SelectionTopBar
 import tw.com.recora.ui.common.Thumbnail
 import tw.com.recora.ui.theme.tabular
@@ -389,7 +390,8 @@ private fun ClipRow(
                     modifier = Modifier.size(width = 96.dp, height = 54.dp),
                 )
                 else -> Thumbnail(
-                    model = null,
+                    // 已下載的影片用手機上的縮圖；沒下載的不從記錄器抓畫面（它一次只服務一個連線）
+                    model = ui.localThumb(clip)?.let { MediaThumb(it, isVideo = true) },
                     placeholder = Icons.Filled.Videocam,
                     modifier = Modifier.size(width = 96.dp, height = 54.dp),
                 )

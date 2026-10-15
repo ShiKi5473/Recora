@@ -66,6 +66,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -560,6 +563,18 @@ fun EditorScreen(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("目前 ${clock(positionMs)} / ${clock(totalMs)}", style = MaterialTheme.typography.bodyMedium.tabular())
                 if (totalMs > 0) {
+                    // 時間軸底下墊一排影格；取不到時隱藏，滑桿維持原樣
+                    val strip = rememberFilmstrip(segments)
+                    Box(Modifier.fillMaxWidth()) {
+                        if (!strip.failed) {
+                            Filmstrip(
+                                strip,
+                                startFraction = range.start / totalMs,
+                                endFraction = range.endInclusive / totalMs,
+                                modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 10.dp)
+                                    .height(44.dp).clip(MaterialTheme.shapes.small),
+                            )
+                        }
                     RangeSlider(
                         value = range,
                         onValueChange = { new ->
@@ -579,7 +594,13 @@ fun EditorScreen(
                         },
                         valueRange = 0f..totalMs.toFloat(),
                         enabled = !exporting,
+                        colors = if (strip.failed) {
+                            SliderDefaults.colors()
+                        } else {
+                            SliderDefaults.colors(activeTrackColor = Color.Transparent, inactiveTrackColor = Color.Transparent)
+                        },
                     )
+                    }
                 }
                 Row(Modifier.fillMaxWidth()) {
                     listOf("起點" to startMs, "終點" to endMs, "長度" to endMs - startMs).forEach { (label, ms) ->

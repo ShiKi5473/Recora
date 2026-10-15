@@ -38,11 +38,17 @@ data class BrowserUi(
     val selection: Set<String> = emptySet(),
     /** 已下載到手機的檔案：大寫檔名 → 大小。 */
     val downloaded: Map<String, Long> = emptyMap(),
+    /** 已下載檔案在手機上的位置（content://）：大寫檔名 → Uri，檔案頁用它顯示縮圖。 */
+    val localUris: Map<String, String> = emptyMap(),
     val working: Boolean = false,
     /** 只顯示還有檔案沒下載的片段。 */
     val onlyMissing: Boolean = false,
 ) {
     fun isDownloaded(file: DashcamFile): Boolean = Clips.isDownloaded(file, downloaded)
+
+    /** 這一段在手機上的縮圖來源（已下載的影片才有；前鏡頭優先）。 */
+    fun localThumb(clip: Clip): String? =
+        clip.files.filter { !it.isImage && isDownloaded(it) }.firstNotNullOfOrNull { localUris[it.name.uppercase()] }
 
     /** 畫面上顯示的片段（套用「未下載」篩選；[includeRear] = 預設下載後鏡頭，沒下載後鏡頭也算未下載）。 */
     fun visibleClips(includeRear: Boolean): List<Clip> =
@@ -261,8 +267,9 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     private suspend fun loadDownloaded(): Map<String, Long> {
-        val map = withContext(Dispatchers.IO) { runCatching { c.sink.downloaded() }.getOrDefault(emptyMap()) }
-        _ui.update { it.copy(downloaded = map) }
+        val entries = withContext(Dispatchers.IO) { runCatching { c.sink.downloadedEntries() }.getOrDefault(emptyMap()) }
+        val map = entries.mapValues { it.value.size }
+        _ui.update { it.copy(downloaded = map, localUris = entries.mapValues { e -> e.value.uri.toString() }) }
         return map
     }
 
