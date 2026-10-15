@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -194,10 +195,12 @@ fun LibraryScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            if (selectionMode) {
+            Crossfade(targetState = selectionMode, label = "topBar") { selecting ->
+            if (selecting) {
                 val selected = ui.selectedItems
                 SelectionTopBar(
-                    title = "已選 ${selected.size} 個 · ${Formats.size(selected.sumOf { it.sizeBytes })}",
+                    title = "已選 ${selected.size} 個",
+                    subtitle = Formats.size(selected.sumOf { it.sizeBytes }),
                     onClose = vm::clearSelection,
                 ) {
                     // 選了頭尾兩個後，把中間的全部選起來
@@ -257,6 +260,7 @@ fun LibraryScreen(
                         }
                     },
                 )
+            }
             }
         },
     ) { pad ->
@@ -537,6 +541,7 @@ private fun MediaList(
             items(group, key = { it.uri }) { item ->
                 MediaRow(
                     item = item,
+                    modifier = Modifier.animateItem(),
                     selectionMode = selectionMode,
                     selected = item.uri in selection,
                     onOpen = { onOpen(item) },
@@ -644,6 +649,7 @@ private fun MediaCell(
 @Composable
 private fun MediaRow(
     item: LocalMedia,
+    modifier: Modifier = Modifier,
     selectionMode: Boolean,
     selected: Boolean,
     onOpen: () -> Unit,
@@ -653,7 +659,7 @@ private fun MediaRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     ListItem(
-        modifier = Modifier.combinedClickable(onClick = onOpen, onLongClick = onLongClick),
+        modifier = modifier.combinedClickable(onClick = onOpen, onLongClick = onLongClick),
         colors = if (selected) {
             ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         } else {

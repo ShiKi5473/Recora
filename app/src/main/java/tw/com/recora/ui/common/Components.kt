@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import tw.com.recora.ui.theme.Scrim
 import tw.com.recora.ui.theme.recora
+import tw.com.recora.ui.theme.tabular
 
 /** 依日期分組的清單標題（黏在頂端），右邊的按鈕可以全選這一天。 */
 @Composable
@@ -110,9 +111,21 @@ fun ConfirmDeleteDialog(
 /** 多選模式的頂列：標題顯示選了多少，左邊的 X 取消選取，[actions] 放各畫面自己的動作。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SelectionTopBar(title: String, onClose: () -> Unit, actions: @Composable RowScope.() -> Unit) {
+fun SelectionTopBar(
+    title: String,
+    onClose: () -> Unit,
+    subtitle: String? = null,
+    actions: @Composable RowScope.() -> Unit,
+) {
     TopAppBar(
-        title = { Text(title) },
+        title = {
+            Column {
+                Text(title)
+                subtitle?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
         navigationIcon = {
             IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "取消選取") }
         },

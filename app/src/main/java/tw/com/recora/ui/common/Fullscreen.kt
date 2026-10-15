@@ -73,3 +73,16 @@ fun LightSystemBarIcons() {
         }
     }
 }
+
+/** [LightSystemBarIcons] 的 Dialog 版：Dialog 有自己的視窗，要設在它身上（Dialog 關掉時視窗一起消失，不必還原）。 */
+@Composable
+fun DialogLightSystemBarIcons() {
+    val view = androidx.compose.ui.platform.LocalView.current
+    val window = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window ?: return
+    DisposableEffect(window) {
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        onDispose { }
+    }
+}

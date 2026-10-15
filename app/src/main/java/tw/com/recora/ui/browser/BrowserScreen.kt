@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -146,7 +147,8 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            if (selectionMode) {
+            Crossfade(targetState = selectionMode, label = "topBar") { selecting ->
+            if (selecting) {
                 SelectionBar(
                     count = ui.selection.size,
                     includeRearDefault = settings.includeRear,
@@ -176,6 +178,7 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
                         ConnectionChip(container)
                     },
                 )
+            }
             }
         },
     ) { pad ->
@@ -334,6 +337,7 @@ private fun ClipList(
             }
             items(clips, key = { it.key }) { clip ->
                 ClipRow(
+                    modifier = Modifier.animateItem(),
                     clip = clip,
                     ui = ui,
                     selectionMode = selectionMode,
@@ -356,6 +360,7 @@ private fun ClipList(
 @Composable
 private fun ClipRow(
     clip: Clip,
+    modifier: Modifier = Modifier,
     ui: BrowserUi,
     selectionMode: Boolean,
     selected: Boolean,
@@ -369,7 +374,7 @@ private fun ClipRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     ListItem(
-        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        modifier = modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
         colors = if (selected) {
             ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         } else {

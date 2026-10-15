@@ -82,6 +82,7 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
     }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        DialogLightSystemBarIcons()
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(state = pager, key = { items[it].url }, modifier = Modifier.fillMaxSize()) { page ->
                 val zoom = remember { ZoomState() }
