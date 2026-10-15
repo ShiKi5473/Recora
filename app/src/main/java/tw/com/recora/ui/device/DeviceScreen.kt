@@ -15,7 +15,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
@@ -37,6 +38,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SdCard
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.ui.draw.clip
+import tw.com.recora.ui.theme.recora
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -85,7 +103,7 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
         ) {
             if (ui.working) LinearProgressIndicator(Modifier.fillMaxWidth())
 
-            Section("連線") {
+            Section("連線", Icons.Filled.Wifi) {
                 Text(
                     when (val s = conn) {
                         is ConnState.Connected ->
@@ -106,8 +124,13 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
             }
 
             if (connected) {
-                Section("錄影") {
-                    Text("目前狀態：${ui.recordStatus ?: "讀取中…"}")
+                Section("錄影", Icons.Filled.Videocam) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (ui.recordStatus?.contains("recording", ignoreCase = true) == true) {
+                            Box(Modifier.size(8.dp).background(MaterialTheme.recora.recordDot, CircleShape))
+                        }
+                        Text("目前狀態：${ui.recordStatus ?: "讀取中…"}")
+                    }
                     Text(
                         if (connectedBrand == Brand.Astro) {
                             "Astro 連線時會繼續錄影；只有用檔案（瀏覽、下載、串流、刪除）或改設定時才暫停，" +
@@ -122,7 +145,7 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                     TextButton(onClick = vm::refreshRecordStatus) { Text("重新讀取狀態") }
                 }
 
-                Section("記憶卡") {
+                Section("記憶卡", Icons.Filled.SdCard) {
                     Text("狀態：${ui.cardStatus ?: "讀取中…"}")
                     StorageSummary(ui, onRefresh = { vm.refreshUsage(refresh = true) })
                     Text(
@@ -141,12 +164,12 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                     if (ui.formatting) LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
 
-                Section("時間") {
+                Section("時間", Icons.Filled.Schedule) {
                     Text("把手機目前的時間寫入記錄器（影片時間戳記與檔名都以記錄器時間為準）。")
                     Button(onClick = vm::syncTime, enabled = !ui.working) { Text("同步手機時間到記錄器") }
                 }
 
-                Section("記錄器設定") {
+                Section("記錄器設定", Icons.Filled.Tune) {
                     when {
                         ui.loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
                         ui.error != null -> Text(ui.error!!, color = MaterialTheme.colorScheme.error)
@@ -212,8 +235,13 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                 }
             }
 
-            ElevatedCard(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
+            Card(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            ) {
                 ListItem(
+                    leadingContent = { Icon(Icons.Filled.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     headlineContent = { Text("App 設定", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = { Text("下載、剪輯匯出、外觀、記錄器 Wi-Fi 密碼") },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
@@ -224,7 +252,7 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
             ConnectionLog(container)
 
             if (BuildConfig.DEBUG) {
-                Section("開發者（debug build）") {
+                Section("開發者（debug build）", Icons.Filled.Code) {
                     var host by rememberSaveable(settings.hostOverride) { mutableStateOf(settings.hostOverride) }
                     Text("記錄器位址覆寫：填入假記錄器位址（模擬器用 adb reverse 加 127.0.0.1:8080），留空 = 使用真實記錄器。")
                     OutlinedTextField(
@@ -247,17 +275,15 @@ private fun StorageSummary(ui: DeviceUi, onRefresh: () -> Unit) {
     val storage = ui.storage
     if (storage?.totalBytes != null && storage.remainBytes != null && storage.totalBytes > 0) {
         val used = (storage.totalBytes - storage.remainBytes).coerceAtLeast(0)
-        LinearProgressIndicator(
-            progress = { (used.toFloat() / storage.totalBytes).coerceIn(0f, 1f) },
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-        )
+        StorageBar(storage.totalBytes, used, ui.usage, Modifier.fillMaxWidth().padding(top = 4.dp))
         Text("剩餘 ${storage.remain} / 總容量 ${storage.total}")
     } else if (storage != null) {
         Text("容量：剩餘 ${storage.remain ?: "?"} / 總容量 ${storage.total ?: "?"}")
     }
     ui.usage?.forEach { (folder, pair) ->
         if (pair.first > 0 || folder == Folder.Normal || folder == Folder.Event) {
-            Row(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.padding(end = 8.dp).size(10.dp).background(folderColor(folder), CircleShape))
                 Text("${folder.label}錄影".replace("照片錄影", "照片"), modifier = Modifier.weight(1f))
                 Text("${Formats.size(pair.second)}（${pair.first} 個檔案）")
             }
@@ -322,7 +348,7 @@ private fun ConnectionLog(container: AppContainer) {
     if (lines.isEmpty()) return
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    Section("診斷紀錄") {
+    Section("診斷紀錄", Icons.Filled.BugReport) {
         Text(
             lines.takeLast(30).joinToString("\n"),
             style = MaterialTheme.typography.bodySmall,
@@ -331,5 +357,31 @@ private fun ConnectionLog(container: AppContainer) {
         TextButton(onClick = {
             scope.launch { clipboard.setClipEntry(ClipData.newPlainText("診斷紀錄", lines.joinToString("\n")).toClipEntry()) }
         }) { Text("複製紀錄") }
+    }
+}
+
+@Composable
+private fun folderColor(folder: Folder): Color = when (folder) {
+    Folder.Normal -> MaterialTheme.colorScheme.primary
+    Folder.Event -> MaterialTheme.colorScheme.error
+    Folder.Parking -> MaterialTheme.colorScheme.tertiary
+    Folder.Photo -> MaterialTheme.colorScheme.secondary
+}
+
+/** 記憶卡容量條：依類別（一般、緊急、停車、照片）分色，其餘已用空間灰色，剩下的是空白。 */
+@Composable
+private fun StorageBar(total: Long, used: Long, usage: Map<Folder, Pair<Int, Long>>?, modifier: Modifier = Modifier) {
+    val segments = Folder.entries.mapNotNull { f ->
+        val bytes = usage?.get(f)?.second ?: 0L
+        if (bytes > 0) folderColor(f) to bytes else null
+    }
+    val other = (used - segments.sumOf { it.second }).coerceAtLeast(0)
+    val otherColor = MaterialTheme.colorScheme.outline
+    val free = (total - used).coerceAtLeast(0)
+    Row(modifier.height(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+        (segments + (otherColor to other)).forEach { (color, bytes) ->
+            if (bytes > 0) Box(Modifier.weight(bytes.toFloat() / total).fillMaxHeight().background(color))
+        }
+        if (free > 0) Spacer(Modifier.weight(free.toFloat() / total))
     }
 }

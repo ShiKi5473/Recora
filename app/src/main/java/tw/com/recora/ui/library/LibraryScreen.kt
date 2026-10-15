@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,9 +21,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -53,8 +57,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Badge
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -93,7 +99,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import tw.com.recora.ui.common.Thumbnail
+import tw.com.recora.ui.theme.Scrim
+import tw.com.recora.ui.theme.tabular
 import kotlinx.coroutines.launch
 import tw.com.recora.AppContainer
 import tw.com.recora.data.Brand
@@ -253,28 +266,35 @@ fun LibraryScreen(
                     Tab(
                         selected = ui.tab == kind,
                         onClick = { vm.selectTab(kind) },
-                        text = { Text("${kind.label}（${ui.of(kind).size}）") },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(kind.label)
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                ) { Text("${ui.of(kind).size}") }
+                            }
+                        },
                     )
                 }
             }
-            // 記錄器種類、鏡頭篩選（左右滑動切換也只在篩選後的清單裡）
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp),
+            // 記錄器種類、鏡頭篩選合成一排，左右捲動（左右滑動切換也只在篩選後的清單裡）
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                (listOf(null) + Brand.entries).forEach { brand ->
+                items(listOf(null) + Brand.entries) { brand ->
                     FilterChip(
                         selected = ui.brandFilter == brand,
                         onClick = { vm.setBrandFilter(brand) },
                         label = { Text(brand?.label ?: "全部") },
                     )
                 }
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(null to "全部", Camera.Front to "前鏡頭", Camera.Rear to "後鏡頭").forEach { (cam, label) ->
+                item {
+                    VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
+                }
+                items(listOf(null to "全部鏡頭", Camera.Front to "前鏡頭", Camera.Rear to "後鏡頭")) { (cam, label) ->
                     FilterChip(
                         selected = ui.cameraFilter == cam,
                         onClick = { vm.setCameraFilter(cam) },
@@ -284,12 +304,17 @@ fun LibraryScreen(
             }
             if (ui.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (!hasFullAccess) {
-                Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
-                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(20.dp))
                         Text(
                             "未允許存取相片和影片：只顯示本 App 建立的檔案",
                             style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+                            modifier = Modifier.weight(1f).padding(start = 8.dp, top = 12.dp, bottom = 12.dp),
                         )
                         TextButton(onClick = {
                             permissionLauncher.launch(
@@ -519,7 +544,7 @@ private fun MediaList(
                     onEdit = { onEdit(item) },
                     onDelete = { onDelete(item) },
                 )
-                HorizontalDivider()
+                HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
@@ -572,28 +597,36 @@ private fun MediaCell(
 ) {
     Column(Modifier.padding(2.dp).combinedClickable(onClick = onOpen, onLongClick = onLongClick)) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                 .then(
-                    if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp)) else Modifier,
+                    if (selected) {
+                        Modifier.border(3.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)
+                    } else {
+                        Modifier
+                    },
                 ),
         ) {
-            AsyncImage(
+            Thumbnail(
                 model = thumbnail(item),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
+                placeholder = if (item.kind == MediaKind.Photo) Icons.Filled.Image else Icons.Filled.Videocam,
+                shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.fillMaxSize(),
             )
             item.camera?.let { cam -> CameraBadge(cam, Modifier.align(Alignment.TopEnd).padding(4.dp)) }
             if (item.durationMs > 0) {
-                Text(
-                    Formats.duration(item.durationMs),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                )
+                // 底部漸層墊著時長，亮的畫面上也讀得到
+                Box(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Scrim.strong)))
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        Formats.duration(item.durationMs),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    )
+                }
             }
             if (selectionMode) SelectionMark(selected, Modifier.align(Alignment.TopStart))
         }
@@ -628,12 +661,10 @@ private fun MediaRow(
         },
         leadingContent = {
             Box {
-                AsyncImage(
+                Thumbnail(
                     model = thumbnail(item),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(width = 88.dp, height = 50.dp).clip(RoundedCornerShape(6.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    placeholder = if (item.kind == MediaKind.Photo) Icons.Filled.Image else Icons.Filled.Videocam,
+                    modifier = Modifier.size(width = 88.dp, height = 50.dp),
                 )
                 // 選取模式：縮圖左上角打勾，仍看得到畫面方便挑選
                 if (selectionMode) SelectionMark(selected, Modifier.align(Alignment.TopStart))
@@ -695,11 +726,12 @@ private fun MediaRow(
 /** 選取模式時縮圖左上角的勾，仍看得到畫面方便挑選。 */
 @Composable
 private fun SelectionMark(selected: Boolean, modifier: Modifier) {
+    val scale by animateFloatAsState(if (selected) 1.15f else 1f, label = "selectionMark")
     Icon(
         Icons.Filled.CheckCircle,
         contentDescription = if (selected) "已選取" else "未選取",
         tint = if (selected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f),
-        modifier = modifier.padding(3.dp).size(20.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape),
+        modifier = modifier.padding(3.dp).size(20.dp).scale(scale).background(Scrim.light, CircleShape),
     )
 }
 

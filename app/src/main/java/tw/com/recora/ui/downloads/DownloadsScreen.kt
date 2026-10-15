@@ -1,7 +1,19 @@
 package tw.com.recora.ui.downloads
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import tw.com.recora.ui.theme.recora
+import tw.com.recora.ui.theme.tabular
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,12 +69,7 @@ fun DownloadsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text("下載")
-                        progress?.let { Text(progressText(it), style = MaterialTheme.typography.bodySmall) }
-                    }
-                },
+                title = { Text("下載") },
                 actions = {
                     if (anyFailed && !anyActive) TextButton(onClick = repo::retryAllFailed) { Text("重試失敗") }
                     if (anyActive) TextButton(onClick = repo::cancelAll) { Text("全部取消") }
@@ -81,8 +88,12 @@ fun DownloadsScreen(
             )
         } else {
             LazyColumn(Modifier.padding(pad).fillMaxSize()) {
+                progress?.let { p ->
+                    item(key = "summary") { SummaryCard(p) }
+                }
                 items(tasks, key = { it.id }) { task ->
                     TaskRow(
+                        modifier = Modifier.animateItem(),
                         task = task,
                         onCancel = { repo.cancel(task.id) },
                         onRetry = { repo.retry(task.id) },
@@ -96,7 +107,7 @@ fun DownloadsScreen(
                         },
                         onEdit = { task.resultUri?.let { onEdit(it.toString(), task.file.name) } },
                     )
-                    HorizontalDivider()
+                    HorizontalDivider(Modifier.padding(start = 72.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
@@ -115,8 +126,17 @@ private fun progressText(p: QueueProgress): String = buildString {
 }
 
 @Composable
-private fun TaskRow(task: DownloadTask, onCancel: () -> Unit, onRetry: () -> Unit, onPlay: () -> Unit, onEdit: () -> Unit) {
+private fun TaskRow(
+    task: DownloadTask,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onPlay: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     ListItem(
+        modifier = modifier,
+        leadingContent = { StatusIcon(task) },
         headlineContent = { Text(task.file.name) },
         supportingContent = {
             Column {
@@ -132,7 +152,7 @@ private fun TaskRow(task: DownloadTask, onCancel: () -> Unit, onRetry: () -> Uni
                     TaskStatus.Failed -> "失敗"
                     TaskStatus.Cancelled -> "已取消"
                 }
-                Text(statusText)
+                Text(statusText, style = MaterialTheme.typography.bodyMedium.tabular())
                 task.message?.let {
                     Text(
                         it,
@@ -175,3 +195,39 @@ private fun TaskRow(task: DownloadTask, onCancel: () -> Unit, onRetry: () -> Uni
     )
 }
 
+
+/** 佇列上方的摘要：還剩幾個、多少容量、預估時間。 */
+@Composable
+private fun SummaryCard(p: QueueProgress) {
+    Card(
+        Modifier.fillMaxWidth().padding(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Download, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            Text(
+                progressText(p),
+                style = MaterialTheme.typography.titleSmall.tabular(),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+    }
+}
+
+/** 任務狀態：排隊、下載中、完成、失敗，各放在對應色調的圓底裡。 */
+@Composable
+private fun StatusIcon(task: DownloadTask) {
+    val scheme = MaterialTheme.colorScheme
+    val (icon, container, content) = when (task.status) {
+        TaskStatus.Queued -> Triple(Icons.Filled.Schedule, scheme.surfaceContainerHighest, scheme.onSurfaceVariant)
+        TaskStatus.Running -> Triple(Icons.Filled.Download, scheme.primaryContainer, scheme.onPrimaryContainer)
+        TaskStatus.Done, TaskStatus.Skipped ->
+            Triple(Icons.Filled.CheckCircle, MaterialTheme.recora.successContainer, MaterialTheme.recora.onSuccessContainer)
+        TaskStatus.Failed -> Triple(Icons.Filled.ErrorOutline, scheme.errorContainer, scheme.onErrorContainer)
+        TaskStatus.Cancelled -> Triple(Icons.Filled.Close, scheme.surfaceContainerHighest, scheme.onSurfaceVariant)
+    }
+    Surface(shape = CircleShape, color = container, contentColor = content, modifier = Modifier.size(40.dp)) {
+        Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp)) }
+    }
+}

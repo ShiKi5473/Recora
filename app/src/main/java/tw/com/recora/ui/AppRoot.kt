@@ -5,13 +5,27 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.SdCard
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.SdCard
+import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Badge
@@ -29,6 +43,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -48,14 +63,14 @@ import tw.com.recora.ui.live.LiveScreen
 import tw.com.recora.ui.player.PlayerScreen
 import tw.com.recora.ui.settings.SettingsScreen
 
-private data class TabItem(val route: String, val label: String, val icon: ImageVector)
+private data class TabItem(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
 private val TABS = listOf(
-    TabItem("files", "檔案", Icons.Filled.VideoLibrary),
-    TabItem("live", "即時", Icons.Filled.Videocam),
-    TabItem("downloads", "下載", Icons.Filled.Download),
-    TabItem("library", "相簿", Icons.Filled.PhotoLibrary),
-    TabItem("device", "裝置", Icons.Filled.Settings),
+    TabItem("files", "檔案", Icons.Outlined.VideoLibrary, Icons.Filled.VideoLibrary),
+    TabItem("live", "即時", Icons.Outlined.Videocam, Icons.Filled.Videocam),
+    TabItem("downloads", "下載", Icons.Outlined.Download, Icons.Filled.Download),
+    TabItem("library", "相簿", Icons.Outlined.PhotoLibrary, Icons.Filled.PhotoLibrary),
+    TabItem("device", "裝置", Icons.Outlined.SdCard, Icons.Filled.SdCard),
 )
 
 private const val PLAYER_ROUTE = "player?url={url}&title={title}"
@@ -91,7 +106,11 @@ fun AppRoot(container: AppContainer) {
     Scaffold(
         contentWindowInsets = WindowInsets(0),
         bottomBar = {
-            if (TABS.any { it.route == route } && !Immersive.active) {
+            AnimatedVisibility(
+                visible = TABS.any { it.route == route } && !Immersive.active,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+            ) {
                 NavigationBar {
                     TABS.forEach { tab ->
                         NavigationBarItem(
@@ -104,12 +123,13 @@ fun AppRoot(container: AppContainer) {
                                 }
                             },
                             icon = {
+                                val icon = if (route == tab.route) tab.selectedIcon else tab.icon
                                 if (tab.route == "downloads" && activeCount > 0) {
                                     BadgedBox(badge = { Badge { Text("$activeCount") } }) {
-                                        Icon(tab.icon, contentDescription = null)
+                                        Icon(icon, contentDescription = null)
                                     }
                                 } else {
-                                    Icon(tab.icon, contentDescription = null)
+                                    Icon(icon, contentDescription = null)
                                 }
                             },
                             label = { Text(tab.label) },
@@ -122,6 +142,10 @@ fun AppRoot(container: AppContainer) {
         NavHost(
             navController = nav,
             startDestination = "files",
+            enterTransition = { fadeIn(tween(220)) },
+            exitTransition = { fadeOut(tween(160)) },
+            popEnterTransition = { fadeIn(tween(220)) },
+            popExitTransition = { fadeOut(tween(160)) },
             modifier = Modifier.padding(inner).consumeWindowInsets(inner),
         ) {
             composable("files") { BrowserScreen(container, onPlay) }
@@ -129,13 +153,23 @@ fun AppRoot(container: AppContainer) {
             composable("downloads") { DownloadsScreen(container, onPlay, onEdit) }
             composable("library") { LibraryScreen(container, onPlay, onEdit) }
             composable("device") { DeviceScreen(container, onOpenSettings = { nav.navigate("settings") }) }
-            composable("settings") { SettingsScreen(container, onBack = { nav.popBackStack() }) }
+            composable(
+                "settings",
+                enterTransition = { pushIn() },
+                exitTransition = { fadeOut(tween(160)) },
+                popEnterTransition = { fadeIn(tween(220)) },
+                popExitTransition = { popOut() },
+            ) { SettingsScreen(container, onBack = { nav.popBackStack() }) }
             composable(
                 PLAYER_ROUTE,
                 arguments = listOf(
                     navArgument("url") { type = NavType.StringType },
                     navArgument("title") { type = NavType.StringType; defaultValue = "" },
                 ),
+                enterTransition = { pushIn() },
+                exitTransition = { fadeOut(tween(160)) },
+                popEnterTransition = { fadeIn(tween(220)) },
+                popExitTransition = { popOut() },
             ) { entry ->
                 PlayerScreen(
                     container = container,
@@ -151,6 +185,10 @@ fun AppRoot(container: AppContainer) {
                     navArgument("uri") { type = NavType.StringType },
                     navArgument("title") { type = NavType.StringType; defaultValue = "" },
                 ),
+                enterTransition = { pushIn() },
+                exitTransition = { fadeOut(tween(160)) },
+                popEnterTransition = { fadeIn(tween(220)) },
+                popExitTransition = { popOut() },
             ) { entry ->
                 EditorScreen(
                     container = container,
@@ -181,3 +219,10 @@ private fun RequestRuntimePermissions() {
         if (missing.isNotEmpty()) launcher.launch(missing.toTypedArray())
     }
 }
+
+/** 進入詳細頁（播放、剪輯、設定）：淡入加上輕微的由右滑入。 */
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.pushIn() =
+    fadeIn(tween(220)) + slideInHorizontally(tween(260)) { it / 12 }
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.popOut() =
+    fadeOut(tween(160)) + slideOutHorizontally(tween(220)) { it / 12 }

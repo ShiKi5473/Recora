@@ -48,6 +48,9 @@ import tw.com.recora.ui.common.ConfirmDeleteDialog
 import tw.com.recora.ui.common.DateHeader
 import tw.com.recora.ui.common.MediaBadge
 import tw.com.recora.ui.common.SelectionTopBar
+import tw.com.recora.ui.common.Thumbnail
+import tw.com.recora.ui.theme.tabular
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -343,7 +346,7 @@ private fun ClipList(
                     onDownload = { choice -> onDownload(clip, choice) },
                     onDelete = { onDelete(clip) },
                 )
-                HorizontalDivider()
+                HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
@@ -375,17 +378,19 @@ private fun ClipRow(
         leadingContent = {
             when {
                 selectionMode -> Checkbox(checked = selected, onCheckedChange = { onLongClick() })
-                clip.primary.isImage -> AsyncImage(
+                clip.primary.isImage -> Thumbnail(
                     model = thumbnailUrl(clip.primary),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(6.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    placeholder = Icons.Filled.Image,
+                    modifier = Modifier.size(width = 96.dp, height = 54.dp),
                 )
-                else -> Icon(Icons.Filled.Videocam, contentDescription = null)
+                else -> Thumbnail(
+                    model = null,
+                    placeholder = Icons.Filled.Videocam,
+                    modifier = Modifier.size(width = 96.dp, height = 54.dp),
+                )
             }
         },
-        headlineContent = { Text(Formats.time(clip.dateTime)) },
+        headlineContent = { Text(Formats.time(clip.dateTime), style = MaterialTheme.typography.titleMedium.tabular()) },
         supportingContent = {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 clip.front?.let { FileBadge("前", it, ui.isDownloaded(it)) }

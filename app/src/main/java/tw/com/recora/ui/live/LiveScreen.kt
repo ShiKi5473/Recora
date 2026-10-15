@@ -60,6 +60,23 @@ import tw.com.recora.data.net.ConnState
 import tw.com.recora.ui.common.ConnectionChip
 import tw.com.recora.ui.common.MessagePane
 import tw.com.recora.ui.common.NotConnectedPane
+import tw.com.recora.ui.theme.Scrim
+import tw.com.recora.ui.theme.recora
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import java.io.IOException
 
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
@@ -181,9 +198,16 @@ private fun LivePlayer(
         return
     }
 
-    Column(modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Box(
+            Modifier.padding(16.dp).fillMaxWidth().aspectRatio(16f / 9f)
+                .clip(MaterialTheme.shapes.large).background(Color.Black),
+        ) {
             LiveVideo(player, Modifier.fillMaxSize())
+            val playing = status == "播放中"
+            val loading = status.startsWith("連線中") || status.startsWith("緩衝中")
+            if (loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            if (playing) LiveBadge(Modifier.align(Alignment.TopStart).padding(12.dp))
             FilledTonalIconButton(
                 onClick = { onFullscreen(true) },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
@@ -191,27 +215,50 @@ private fun LivePlayer(
                 Icon(Icons.Filled.Fullscreen, contentDescription = "全螢幕")
             }
         }
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(status, style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
-                views.forEach { v ->
-                    FilterChip(
-                        selected = v.id == view.id,
-                        onClick = { selectView(v.id) },
-                        label = { Text(v.label) },
-                    )
+            if (views.size > 1) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    views.forEachIndexed { i, v ->
+                        SegmentedButton(
+                            selected = v.id == view.id,
+                            onClick = { selectView(v.id) },
+                            shape = SegmentedButtonDefaults.itemShape(i, views.size),
+                        ) { Text(v.label) }
+                    }
                 }
             }
-            OutlinedButton(onClick = { generation++ }, modifier = Modifier.padding(top = 12.dp)) {
-                Text("重新連線")
-            }
+            OutlinedButton(onClick = { generation++ }) { Text("重新連線") }
             Text(
                 url,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 16.dp),
             )
         }
+    }
+}
+
+/** 影像左上角的「● LIVE」：紅點緩慢脈動，呼應 logo 的錄影點。 */
+@Composable
+private fun LiveBadge(modifier: Modifier = Modifier) {
+    val pulse = rememberInfiniteTransition(label = "live")
+    val alpha by pulse.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.35f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "liveDot",
+    )
+    Row(
+        modifier.background(Scrim.light, MaterialTheme.shapes.extraSmall).padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).alpha(alpha).background(MaterialTheme.recora.recordDot, CircleShape))
+        Text(
+            "LIVE",
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(start = 6.dp),
+        )
     }
 }
 

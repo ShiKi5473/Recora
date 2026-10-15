@@ -31,6 +31,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.animation.animateContentSize
+import tw.com.recora.ui.theme.tabular
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -551,8 +555,10 @@ fun EditorScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("目前 ${clock(positionMs)} / ${clock(totalMs)}", style = MaterialTheme.typography.bodyMedium)
+            Column(Modifier.padding(16.dp).animateContentSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("目前 ${clock(positionMs)} / ${clock(totalMs)}", style = MaterialTheme.typography.bodyMedium.tabular())
                 if (totalMs > 0) {
                     RangeSlider(
                         value = range,
@@ -575,10 +581,14 @@ fun EditorScreen(
                         enabled = !exporting,
                     )
                 }
-                Text(
-                    "起點 ${clock(startMs)}　終點 ${clock(endMs)}　長度 ${clock(endMs - startMs)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                Row(Modifier.fillMaxWidth()) {
+                    listOf("起點" to startMs, "終點" to endMs, "長度" to endMs - startMs).forEach { (label, ms) ->
+                        Column(Modifier.weight(1f)) {
+                            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(clock(ms), style = MaterialTheme.typography.titleMedium.tabular())
+                        }
+                    }
+                }
                 if (totalMs > 0) {
                     val estimate = remember(formatVersion, sourceBitrate, rangeBytes, startMs, endMs, removeAudio, settings) { estimatedBytes(settings) }
                     val another = alsoOtherCamera && counterpartUris != null
@@ -613,6 +623,10 @@ fun EditorScreen(
                     ) { Text("設為終點") }
                     TextButton(onClick = { seekCombined(startMs); player.play() }, enabled = !exporting) { Text("播放範圍") }
                 }
+                    }
+                }
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (canJoin) {
                     Text(
                         "事件跨到前後一段時，可以接上手機上已下載、錄影時間接在一起的片段一起剪",
@@ -682,13 +696,19 @@ fun EditorScreen(
                     }
                     TextButton(onClick = { showExportOptions = true }, enabled = !exporting) { Text("變更") }
                 }
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = ::screenshot, enabled = !exporting) {
                         Icon(Icons.Filled.CameraAlt, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                         Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                         Text("截圖")
                     }
-                    Button(onClick = ::export, enabled = !exporting && totalMs > 0 && endMs - startMs >= MIN_CLIP_MS) {
+                    Button(
+                        onClick = ::export,
+                        enabled = !exporting && totalMs > 0 && endMs - startMs >= MIN_CLIP_MS,
+                        modifier = Modifier.weight(1f),
+                    ) {
                         Icon(Icons.Filled.ContentCut, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                         Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                         Text("匯出 MP4")

@@ -12,6 +12,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -46,6 +52,7 @@ import tw.com.recora.data.SubfolderMode
 import tw.com.recora.data.ThemeMode
 import tw.com.recora.ui.common.ChoiceRow
 import tw.com.recora.ui.common.Section
+import tw.com.recora.ui.common.SettingRow
 import tw.com.recora.ui.common.SwitchRow
 import tw.com.recora.ui.editor.ClipExporter
 import tw.com.recora.ui.library.LibraryFoldersDialog
@@ -76,7 +83,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Section("下載") {
+            Section("下載", Icons.Filled.Download) {
                 SwitchRow(
                     title = "預設下載後鏡頭",
                     subtitle = "下載選單中「前+後鏡頭」排在第一個；備份緊急錄影時也一併下載後鏡頭",
@@ -98,7 +105,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 AlbumDirField(settings.albumDir) { dir -> update { it.copy(albumDir = dir) } }
             }
 
-            Section("瀏覽") {
+            Section("瀏覽", Icons.Filled.VideoLibrary) {
                 ChoiceRow(
                     title = "開啟時顯示的資料夾",
                     options = Folder.entries,
@@ -113,21 +120,16 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     checked = settings.libraryGrid,
                 ) { v -> update { it.copy(libraryGrid = v) } }
                 var showFolders by remember { mutableStateOf(false) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("相簿資料夾")
-                        Text(
-                            "App 的資料夾以外也讀：${libraryFoldersSummary(settings.libraryFolders)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                SettingRow(
+                    title = "相簿資料夾",
+                    subtitle = "App 的資料夾以外也讀：${libraryFoldersSummary(settings.libraryFolders)}",
+                ) {
                     TextButton(onClick = { showFolders = true }) { Text("變更") }
                 }
                 if (showFolders) LibraryFoldersDialog(container, onDismiss = { showFolders = false })
             }
 
-            Section("播放") {
+            Section("播放", Icons.Filled.PlayCircle) {
                 SwitchRow(
                     title = "播完自動播下一段",
                     subtitle = "依錄影時間接著播（播放畫面上也能切換）",
@@ -140,9 +142,9 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 ) { v -> update { it.copy(screenshotVisibleArea = v) } }
             }
 
-            Section("剪輯匯出") { ExportSettingsFields(settings, update) }
+            Section("剪輯匯出", Icons.Filled.ContentCut) { ExportSettingsFields(settings, update) }
 
-            Section("外觀") {
+            Section("外觀", Icons.Filled.Palette) {
                 ChoiceRow(
                     title = "主題",
                     options = ThemeMode.entries,
@@ -159,7 +161,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 }
             }
 
-            Section("MUFU 記錄器 Wi-Fi") {
+            Section("MUFU 記錄器 Wi-Fi", Icons.Filled.Wifi) {
                 WifiFields(
                     ssidPrefix = settings.ssidPrefix,
                     password = settings.wifiPassword,
@@ -167,7 +169,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 )
             }
 
-            Section("Astro 記錄器 Wi-Fi") {
+            Section("Astro 記錄器 Wi-Fi", Icons.Filled.Wifi) {
                 WifiFields(
                     ssidPrefix = settings.astroSsidPrefix,
                     password = settings.astroWifiPassword,
