@@ -153,7 +153,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     SwitchRow(
                         title = "動態色彩",
-                        subtitle = "依桌布配色",
+                        subtitle = "依桌布配色；關閉時使用錄刻品牌色",
                         checked = settings.dynamicColor,
                     ) { v -> update { it.copy(dynamicColor = v) } }
                 }

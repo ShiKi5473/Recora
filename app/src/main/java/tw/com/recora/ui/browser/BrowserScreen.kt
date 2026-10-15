@@ -44,6 +44,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import tw.com.recora.ui.common.ConfirmDeleteDialog
+import tw.com.recora.ui.common.DateHeader
+import tw.com.recora.ui.common.MediaBadge
+import tw.com.recora.ui.common.SelectionTopBar
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -287,25 +291,19 @@ private fun SelectionBar(
     onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
-    TopAppBar(
-        title = { Text("已選 $count 段") },
-        navigationIcon = {
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "取消選取") }
-        },
-        actions = {
-            // 選了頭尾兩段後，把中間的全部選起來
-            if (count >= 2) TextButton(onClick = onSelectRange) { Text("選取範圍") }
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.Download, contentDescription = "下載") }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    downloadOptions(includeRearDefault).forEach { choice ->
-                        DropdownMenuItem(text = { Text(choice.label) }, onClick = { menu = false; onDownload(choice) })
-                    }
+    SelectionTopBar(title = "已選 $count 段", onClose = onClose) {
+        // 選了頭尾兩段後，把中間的全部選起來
+        if (count >= 2) TextButton(onClick = onSelectRange) { Text("選取範圍") }
+        Box {
+            IconButton(onClick = { menu = true }) { Icon(Icons.Filled.Download, contentDescription = "下載") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                downloadOptions(includeRearDefault).forEach { choice ->
+                    DropdownMenuItem(text = { Text(choice.label) }, onClick = { menu = false; onDownload(choice) })
                 }
             }
-            IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "刪除") }
-        },
-    )
+        }
+        IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, contentDescription = "刪除") }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -346,21 +344,6 @@ private fun ClipList(
                     onDelete = { onDelete(clip) },
                 )
                 HorizontalDivider()
-            }
-        }
-    }
-}
-
-@Composable
-private fun DateHeader(title: String, onSelectAll: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-            IconButton(onClick = onSelectAll) {
-                Icon(Icons.Filled.SelectAll, contentDescription = "全選這一天")
             }
         }
     }
@@ -443,51 +426,32 @@ private fun ClipRow(
 
 @Composable
 private fun FileBadge(label: String, file: DashcamFile, downloaded: Boolean) {
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        color = if (downloaded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Row(
-            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val sizeText = if (file.guessed) "" else " ${Formats.size(file.size)}"
-            Text("$label$sizeText", style = MaterialTheme.typography.labelSmall)
-            if (downloaded) {
-                Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = "已下載",
-                    modifier = Modifier.padding(start = 3.dp).size(12.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-    }
+    val scheme = MaterialTheme.colorScheme
+    MediaBadge(
+        label = label + if (file.guessed) "" else " ${Formats.size(file.size)}",
+        container = if (downloaded) scheme.primaryContainer else scheme.surfaceVariant,
+        content = if (downloaded) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+        downloaded = downloaded,
+    )
 }
 
 @Composable
 private fun DeleteDialog(clips: List<Clip>, onDismiss: () -> Unit, onConfirm: (includeRear: Boolean) -> Unit) {
     var includeRear by remember { mutableStateOf(true) }
     val hasRear = clips.any { it.rear != null && it.front != null }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("從記錄器刪除 ${clips.size} 段？") },
-        text = {
-            Column {
-                Text("刪除後無法復原（手機上已下載的檔案不受影響）。")
-                if (hasRear) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = includeRear, onCheckedChange = { includeRear = it })
-                        Text("一併刪除後鏡頭檔")
-                    }
+    ConfirmDeleteDialog(
+        title = "從記錄器刪除 ${clips.size} 段？",
+        onDismiss = onDismiss,
+        onConfirm = { onConfirm(includeRear) },
+    ) {
+        Column {
+            Text("刪除後無法復原（手機上已下載的檔案不受影響）。")
+            if (hasRear) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = includeRear, onCheckedChange = { includeRear = it })
+                    Text("一併刪除後鏡頭檔")
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(includeRear) }) {
-                Text("刪除", color = MaterialTheme.colorScheme.error)
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+        }
+    }
 }

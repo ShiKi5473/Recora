@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Recora" parent="android:Theme.Material.Light.NoActionBar" />
-    <color name="ic_launcher_background">#F7F2EC</color>
+    <style name="Theme.Recora" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/recora_surface</item>
+    </style>
+
+    <!-- 啟動畫面：啟動後由 installSplashScreen() 換回 Theme.Recora -->
+    <style name="Theme.Recora.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/recora_surface</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/recora_splash_icon_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.Recora</item>
+    </style>
 </resources>

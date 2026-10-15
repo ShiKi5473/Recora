@@ -65,6 +65,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import tw.com.recora.ui.common.ConfirmDeleteDialog
+import tw.com.recora.ui.common.MediaBadge
+import tw.com.recora.ui.common.SelectionTopBar
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -179,30 +182,25 @@ fun LibraryScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             if (selectionMode) {
-                TopAppBar(
-                    title = {
-                        val selected = ui.selectedItems
-                        Text("已選 ${selected.size} 個 · ${Formats.size(selected.sumOf { it.sizeBytes })}")
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = vm::clearSelection) { Icon(Icons.Filled.Close, contentDescription = "取消選取") }
-                    },
-                    actions = {
-                        // 選了頭尾兩個後，把中間的全部選起來
-                        if (ui.selection.size >= 2) {
-                            TextButton(onClick = { vm.selectRange(items.map { it.uri }) }) { Text("選取範圍") }
-                        }
-                        IconButton(onClick = { vm.selectAll(items.map { it.uri }) }) {
-                            Icon(Icons.Filled.SelectAll, contentDescription = "全選")
-                        }
-                        IconButton(onClick = { share(context, ui.selectedItems) }) {
-                            Icon(Icons.Filled.Share, contentDescription = "分享")
-                        }
-                        IconButton(onClick = { pendingDelete = ui.selectedItems }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "刪除")
-                        }
-                    },
-                )
+                val selected = ui.selectedItems
+                SelectionTopBar(
+                    title = "已選 ${selected.size} 個 · ${Formats.size(selected.sumOf { it.sizeBytes })}",
+                    onClose = vm::clearSelection,
+                ) {
+                    // 選了頭尾兩個後，把中間的全部選起來
+                    if (ui.selection.size >= 2) {
+                        TextButton(onClick = { vm.selectRange(items.map { it.uri }) }) { Text("選取範圍") }
+                    }
+                    IconButton(onClick = { vm.selectAll(items.map { it.uri }) }) {
+                        Icon(Icons.Filled.SelectAll, contentDescription = "全選")
+                    }
+                    IconButton(onClick = { share(context, ui.selectedItems) }) {
+                        Icon(Icons.Filled.Share, contentDescription = "分享")
+                    }
+                    IconButton(onClick = { pendingDelete = ui.selectedItems }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "刪除")
+                    }
+                }
             } else {
                 TopAppBar(
                     title = { Text("相簿") },
@@ -391,20 +389,14 @@ fun LibraryScreen(
         )
     }
     pendingDelete?.let { targets ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text(if (targets.size == 1) "刪除這個檔案？" else "刪除 ${targets.size} 個檔案？") },
-            text = {
-                val what = if (targets.size == 1) targets[0].name + "\n" else ""
-                Text("${what}會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。")
-            },
-            confirmButton = {
-                TextButton(onClick = { pendingDelete = null; vm.delete(targets) }) {
-                    Text("刪除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-        )
+        ConfirmDeleteDialog(
+            title = if (targets.size == 1) "刪除這個檔案？" else "刪除 ${targets.size} 個檔案？",
+            onDismiss = { pendingDelete = null },
+            onConfirm = { pendingDelete = null; vm.delete(targets) },
+        ) {
+            val what = if (targets.size == 1) targets[0].name + "\n" else ""
+            Text("${what}會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。")
+        }
     }
 }
 
@@ -498,23 +490,8 @@ private fun timeLabel(item: LocalMedia): String = when (item.kind) {
 }
 
 @Composable
-private fun DateHeader(date: LocalDate?, count: Int, onSelectAll: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(start = 16.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "${Formats.date(date)} · $count 個",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = onSelectAll) {
-                Icon(Icons.Filled.SelectAll, contentDescription = "全選這一天")
-            }
-        }
-    }
-}
+private fun DateHeader(date: LocalDate?, count: Int, onSelectAll: () -> Unit) =
+    tw.com.recora.ui.common.DateHeader("${Formats.date(date)} · $count 個", onSelectAll)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -730,16 +707,11 @@ private fun SelectionMark(selected: Boolean, modifier: Modifier) {
 @Composable
 private fun CameraBadge(camera: Camera, modifier: Modifier = Modifier) {
     val front = camera == Camera.Front
-    Surface(
-        shape = RoundedCornerShape(4.dp),
-        color = if (front) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer,
+    val scheme = MaterialTheme.colorScheme
+    MediaBadge(
+        label = if (front) "前" else "後",
         modifier = modifier,
-    ) {
-        Text(
-            if (front) "前" else "後",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (front) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onTertiaryContainer,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
+        container = if (front) scheme.primaryContainer else scheme.tertiaryContainer,
+        content = if (front) scheme.onPrimaryContainer else scheme.onTertiaryContainer,
+    )
 }

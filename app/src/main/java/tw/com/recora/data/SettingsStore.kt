@@ -81,7 +81,7 @@ data class AppSettings(
     val exportBitrateFactors: Map<String, Float> = emptyMap(),
     val themeMode: ThemeMode = ThemeMode.System,
     /** Android 12 以上依桌布配色。 */
-    val dynamicColor: Boolean = true,
+    val dynamicColor: Boolean = false,
 ) {
     val overrideActive: Boolean get() = BuildConfig.DEBUG && hostOverride.isNotBlank()
 
@@ -131,7 +131,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val legacyBitrateFactorsV1 = stringSetPreferencesKey("export_bitrate_factors")
 
         val themeMode = stringPreferencesKey("theme_mode")
-        val dynamicColor = booleanPreferencesKey("dynamic_color")
+        val dynamicColor = booleanPreferencesKey("dynamic_color_v2")
     }
 
     val flow: Flow<AppSettings> = store.data.map(::read)

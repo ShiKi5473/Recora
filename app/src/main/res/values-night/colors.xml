@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="recora_surface">#1A1816</color>
+    <!-- logo 是炭灰線條，深色啟動畫面要墊一個米白圓底才看得到 -->
+    <color name="recora_splash_icon_background">#F7F2EC</color>
+</resources>

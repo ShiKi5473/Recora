@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#F7F2EC</color>
+    <!-- 與 ui/theme/Color.kt 的 surface 相同：視窗底色與啟動畫面底色 -->
+    <color name="recora_surface">#F7F2EC</color>
+    <color name="recora_splash_icon_background">#F7F2EC</color>
+</resources>

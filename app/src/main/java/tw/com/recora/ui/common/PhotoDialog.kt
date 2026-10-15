@@ -103,11 +103,7 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
                 )
             }
             val photo = items.getOrNull(pager.currentPage)
-            Row(
-                Modifier.fillMaxWidth().align(Alignment.TopStart).safeDrawingPadding().padding(4.dp)
-                    .background(Color.Black.copy(alpha = 0.4f)),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            OverlayTopBar(Modifier.align(Alignment.TopStart)) {
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
                 }
@@ -147,24 +143,18 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
         }
         pendingDelete?.let { item ->
             val local = isLocal(item)
-            AlertDialog(
-                onDismissRequest = { pendingDelete = null },
-                title = { Text(if (local) "從手機相簿刪除？" else "從記錄器刪除？") },
-                text = {
-                    val detail = if (local) {
-                        "會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。"
-                    } else {
-                        "會從記錄器刪除，無法復原（手機上已下載的照片不受影響）。"
-                    }
-                    Text("${item.title}\n$detail")
-                },
-                confirmButton = {
-                    TextButton(onClick = { pendingDelete = null; deleteItem(item) }) {
-                        Text("刪除", color = MaterialTheme.colorScheme.error)
-                    }
-                },
-                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-            )
+            ConfirmDeleteDialog(
+                title = if (local) "從手機相簿刪除？" else "從記錄器刪除？",
+                onDismiss = { pendingDelete = null },
+                onConfirm = { pendingDelete = null; deleteItem(item) },
+            ) {
+                val detail = if (local) {
+                    "會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。"
+                } else {
+                    "會從記錄器刪除，無法復原（手機上已下載的照片不受影響）。"
+                }
+                Text("${item.title}\n$detail")
+            }
         }
     }
 }

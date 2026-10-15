@@ -53,3 +53,23 @@ private fun Activity.applyFullscreen(on: Boolean) {
         controller.show(WindowInsetsCompat.Type.systemBars())
     }
 }
+
+/**
+ * 黑底的畫面（播放器、照片檢視、即時畫面）：狀態列、導覽列圖示固定用淺色，
+ * 否則淺色主題下是深色圖示，在黑底上看不到。離開畫面時還原。
+ */
+@Composable
+fun LightSystemBarIcons() {
+    val activity = LocalContext.current as? Activity ?: return
+    DisposableEffect(Unit) {
+        val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        val statusBefore = controller.isAppearanceLightStatusBars
+        val navBefore = controller.isAppearanceLightNavigationBars
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        onDispose {
+            controller.isAppearanceLightStatusBars = statusBefore
+            controller.isAppearanceLightNavigationBars = navBefore
+        }
+    }
+}

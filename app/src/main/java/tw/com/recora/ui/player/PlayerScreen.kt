@@ -92,6 +92,11 @@ import tw.com.recora.data.PlayItem
 import tw.com.recora.data.PlayOrder
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.FullscreenEffect
+import tw.com.recora.ui.common.LightSystemBarIcons
+import tw.com.recora.ui.common.ConfirmDeleteDialog
+import tw.com.recora.ui.common.OverlayChip
+import tw.com.recora.ui.common.OverlayTopBar
+import tw.com.recora.ui.theme.Scrim
 import tw.com.recora.ui.common.ZoomState
 import tw.com.recora.ui.common.captureFrame
 import tw.com.recora.ui.common.isDeletable
@@ -382,6 +387,7 @@ fun PlayerScreen(
     var pendingDelete by remember { mutableStateOf<PlayItem?>(null) }
 
     FullscreenEffect(fullscreen) { fullscreen = false }
+    LightSystemBarIcons()
 
     Box(Modifier.fillMaxSize().background(Color.Black).swipeToJump(enabled = { !zoom.isZoomed }, onJump = ::jump)) {
         Box(
@@ -425,18 +431,18 @@ fun PlayerScreen(
                             Formats.dateTime(it),
                             color = Color.White,
                             style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            modifier = Modifier.background(Scrim.light, MaterialTheme.shapes.extraSmall)
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
                     Spacer(Modifier.weight(1f))
                     // 全螢幕時右上角也保留截圖
-                    IconButton(onClick = screenshot, modifier = Modifier.background(Color.Black.copy(alpha = 0.4f), CircleShape)) {
+                    IconButton(onClick = screenshot, modifier = Modifier.background(Scrim.light, CircleShape)) {
                         Icon(Icons.Filled.CameraAlt, contentDescription = "截圖", tint = Color.White)
                     }
                 }
             } else {
-                Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                OverlayTopBar {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
                     }
@@ -509,36 +515,30 @@ fun PlayerScreen(
                     color = Color.White,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp)
-                        .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 16.dp, vertical = 8.dp),
+                        .background(Scrim.strong, MaterialTheme.shapes.medium).padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
         }
         pendingDelete?.let { item ->
             val local = isLocal(item)
-            AlertDialog(
-                onDismissRequest = { pendingDelete = null },
-                title = { Text(if (local) "從手機相簿刪除？" else "從記錄器刪除？") },
-                text = {
-                    val detail = if (local) {
-                        "會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。"
-                    } else {
-                        "會從記錄器刪除，無法復原（手機上已下載的檔案不受影響）。"
-                    }
-                    Text("${item.title}\n$detail")
+            ConfirmDeleteDialog(
+                title = if (local) "從手機相簿刪除？" else "從記錄器刪除？",
+                onDismiss = { pendingDelete = null },
+                onConfirm = {
+                    pendingDelete = null
+                    // 記錄器的 HTTP 伺服器一次只服務一個連線：先停播放，del 的 CGI 才連得上。
+                    // 本機檔也先停，免得檔案在播放中被刪掉而跳出播放錯誤。
+                    player.stop()
+                    deleteItem(item)
                 },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            pendingDelete = null
-                            // 記錄器的 HTTP 伺服器一次只服務一個連線：先停播放，del 的 CGI 才連得上。
-                            // 本機檔也先停，免得檔案在播放中被刪掉而跳出播放錯誤。
-                            player.stop()
-                            deleteItem(item)
-                        },
-                    ) { Text("刪除", color = MaterialTheme.colorScheme.error) }
-                },
-                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-            )
+            ) {
+                val detail = if (local) {
+                    "會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。"
+                } else {
+                    "會從記錄器刪除，無法復原（手機上已下載的檔案不受影響）。"
+                }
+                Text("${item.title}\n$detail")
+            }
         }
     }
 }
@@ -583,23 +583,6 @@ private fun MoreMenu(
                     onClick = { open = false; onDelete() },
                 )
             }
-        }
-    }
-}
-
-/** 疊在影片上的小按鈕（半透明黑底白字；[selected] 時用主色）。 */
-@Composable
-private fun OverlayChip(label: String, icon: ImageVector, selected: Boolean = false, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = if (selected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.5f),
-        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else Color.White,
-    ) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
