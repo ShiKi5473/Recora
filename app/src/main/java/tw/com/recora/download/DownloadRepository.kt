@@ -81,9 +81,9 @@ class DownloadRepository(
     /** [hold] 的次數；大於 0 時佇列暫停（例如正在從記錄器串流播放）。 */
     private val holds = MutableStateFlow(0)
 
-    /** 因 [hold] 而中斷的那個檔案：回到等待中，而不是變成「已取消」。 */
+    /** 因 [hold]／[pauseForDisconnect] 而中斷的那個檔案（id → 等待時顯示的訊息）：回到等待中，而不是變成「已取消」。 */
     @Volatile
-    private var pausingId: String? = null
+    private var pausing: Pair<String, String>? = null
 
     /** 佇列目前是否因 [hold] 暫停（通知用：暫停不算下載結束）。 */
     val isHeld: Boolean get() = holds.value > 0
@@ -154,10 +154,22 @@ class DownloadRepository(
     fun hold(): Boolean {
         holds.update { it + 1 }
         current?.let { (id, job) ->
-            pausingId = id
+            pausing = id to "暫停中：正在播放記錄器上的影片"
             job.cancel()
         }
         return _tasks.value.any { it.isActive }
+    }
+
+    /**
+     * 中斷連線時呼叫：正在下載的檔案停在目前位置、回到等待中（保留 pending 檔，重新連上後從中斷處續傳），
+     * 不標成已取消，也不再對記錄器重試。沒有在下載就什麼都不做。
+     */
+    @Synchronized
+    fun pauseForDisconnect() {
+        val (id, job) = current ?: return
+        val task = _tasks.value.firstOrNull { it.id == id } ?: return
+        pausing = id to waitingMessage(task.file.brand)
+        job.cancel()
     }
 
     fun release() {
@@ -221,13 +233,13 @@ class DownloadRepository(
                 markWaiting()
                 break
             }
-            // 與 hold() 同步：暫停之後不再開始下一個檔案
+            // 與 hold()、pauseForDisconnect() 同步：暫停或中斷連線之後不再開始下一個檔案
             val job = synchronized(this@DownloadRepository) {
-                if (holds.value > 0) null else launch { runTask(next) }.also { current = next.id to it }
+                if (holds.value > 0 || connectedBrand() != next.file.brand) null else launch { runTask(next) }.also { current = next.id to it }
             } ?: break
             job.join()
             current = null
-            pausingId = null
+            pausing = null
         }
     }
 
@@ -249,9 +261,10 @@ class DownloadRepository(
             // Astro：整個檔案下載期間維持檔案模式（停錄），下載完約 10 秒沒有下一個檔案就恢復錄影
             api(f.brand).withFiles { download(task, existing) }
         } catch (e: CancellationException) {
-            if (pausingId == task.id) {
-                pausingId = null
-                updateTask(task.id) { it.copy(status = TaskStatus.Queued, speedBps = 0, message = "暫停中：正在播放記錄器上的影片") }
+            val paused = pausing?.takeIf { it.first == task.id }
+            if (paused != null) {
+                pausing = null
+                updateTask(task.id) { it.copy(status = TaskStatus.Queued, speedBps = 0, message = paused.second) }
             } else {
                 updateTask(task.id) { it.copy(status = TaskStatus.Cancelled, message = "已取消（再次下載會從中斷處續傳）") }
             }

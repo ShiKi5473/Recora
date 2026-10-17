@@ -112,6 +112,14 @@ class AstroSession(
     }
 
     /**
+     * 不等閒置計時、現在就做計時到時會做的事（App 退到背景：之後隨時可能被關掉）。判斷同計時到時：
+     * 有人在用檔案、或這次連線沒改過記錄器的狀態就不動。計時照常進行：這裡恢復了到時沒事可做，失敗的話到時再試一次。
+     */
+    suspend fun restoreIfIdle() {
+        mutex.withLock { restoreIfIdleLocked() }
+    }
+
+    /**
      * 剛連上（安全網，記錄器不能因為手機連過就停著不錄）：記錄器沒在錄影時——可能是「檔案」頁已經搶先停錄，
      * 也可能是上次停錄中途斷線留下的——一律記成由我們負責恢復錄影；沒有人要用檔案就馬上恢復。
      *
@@ -157,9 +165,7 @@ class AstroSession(
             idleJob = scope.launch {
                 delay(idleMs)
                 try {
-                    mutex.withLock {
-                        if (synchronized(this@AstroSession) { holders == 0 }) restoreLocked()
-                    }
+                    mutex.withLock { restoreIfIdleLocked() }
                 } catch (e: IOException) {
                     DiagLog.log("恢復錄影失敗：${e.message}")
                 }
@@ -175,6 +181,16 @@ class AstroSession(
         }
         commands.enterPlayback()
         mode = Mode.Files
+    }
+
+    /**
+     * 呼叫端持有 [mutex]。有人在用檔案就不動；[reset] 之後（突然斷線）這次連線沒改過記錄器的狀態也不動：
+     * 不需要恢復，也不要對已經離線的記錄器送指令（診斷紀錄會多出誤導的「恢復錄影失敗」）。
+     */
+    private suspend fun restoreIfIdleLocked() {
+        if (synchronized(this) { holders > 0 }) return
+        if (mode == Mode.Unknown && !stoppedByUs) return
+        restoreLocked()
     }
 
     /** 呼叫端持有 [mutex]。 */

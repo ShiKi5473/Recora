@@ -53,16 +53,38 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
     private val _messages = Channel<String>(Channel.BUFFERED)
     val messages: Flow<String> = _messages.receiveAsFlow()
 
+    /** 「裝置」頁現在看得到（回到前景、停在這個分頁）。 */
+    private var visible = false
+
+    /** 這次連線已經讀過記錄器的設定與狀態；斷線時重設。 */
+    private var loadedThisConnection = false
+
     init {
         viewModelScope.launch {
             c.connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
-                if (connected) loadInfo() else _ui.update { DeviceUi() }
+                if (connected) {
+                    // 沒在看這一頁就先不讀，等 setVisible(true) 再補讀
+                    if (visible && !loadedThisConnection) loadInfo()
+                } else {
+                    loadedThisConnection = false
+                    _ui.update { DeviceUi() }
+                }
             }
         }
     }
 
+    /**
+     * 「裝置」頁出現或離開；出現時（已連線、這次連線還沒讀過）補讀。
+     * 這個 ViewModel 切換分頁後仍留著，不能一連上就在背景讀：MUFU 一次只服務一個連線，會跟「檔案」頁的列表、下載搶。
+     */
+    fun setVisible(value: Boolean) {
+        visible = value
+        if (value && c.connection.isConnected && !loadedThisConnection) loadInfo()
+    }
+
     /** 讀取記錄器設定（可改的項目與選項依記錄器回報的為準）。 */
     fun loadInfo() {
+        loadedThisConnection = true
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {

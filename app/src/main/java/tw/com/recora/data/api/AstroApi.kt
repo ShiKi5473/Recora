@@ -190,6 +190,9 @@ class AstroApi(
         session.reset()
     }
 
+    /** 退到背景後 App 可能被滑掉關閉：沒有人在用檔案就不等 10 秒，馬上恢復錄影模式與錄影（只恢復這次連線我們改過的）。 */
+    override suspend fun onAppBackground() = session.restoreIfIdle()
+
     private fun startKeepAlive() {
         val job = scope.launch {
             while (isActive) {

@@ -70,6 +70,12 @@ interface DashcamApi {
     /** 連線已經結束（網路已解除綁定，不能再送請求）：停掉背景工作、清掉狀態。 */
     fun onDisconnected() {}
 
+    /**
+     * App 退到背景（不是設定變更）時呼叫：畫面拿的 [holdFiles] 都已經歸還，之後 App 隨時可能被關掉。
+     * Astro 不等閒置計時、馬上恢復錄影。佇列還有這台記錄器的檔案要下載時不會呼叫（下載馬上又要停錄）。
+     */
+    suspend fun onAppBackground() {}
+
     suspend fun syncTime(now: ZonedDateTime = ZonedDateTime.now()): SetResult
 
     /** 讀取資料夾，每讀到一頁就送出目前累積的完整清單。 */

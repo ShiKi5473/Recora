@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.toClipEntry
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
@@ -68,6 +69,11 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
     val settings by container.settings.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(it) } }
+    // 看得到這一頁才向記錄器讀取（連線中、這次連線還沒讀過才讀）
+    LifecycleResumeEffect(vm) {
+        vm.setVisible(true)
+        onPauseOrDispose { vm.setVisible(false) }
+    }
     val connected = conn is ConnState.Connected
     val connectedBrand = (conn as? ConnState.Connected)?.brand
     var askFormat by remember { mutableStateOf(false) }
@@ -148,7 +154,8 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
 
                 Section("記錄器設定") {
                     when {
-                        ui.loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                        // 還沒開始讀（頁面剛出現、等 setVisible）也算讀取中，免得先閃一下「沒有回傳設定值」
+                        ui.loading || (!ui.settingsLoaded && ui.error == null) -> LinearProgressIndicator(Modifier.fillMaxWidth())
                         ui.error != null -> Text(ui.error!!, color = MaterialTheme.colorScheme.error)
                         !ui.settingsLoaded || (ui.defs.isEmpty() && ui.readOnly.isEmpty()) -> Text("記錄器沒有回傳設定值")
                         else -> {

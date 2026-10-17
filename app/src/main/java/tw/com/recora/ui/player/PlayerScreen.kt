@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.ForwardingPlayer
@@ -282,16 +283,17 @@ fun PlayerScreen(
         }
     }
 
-    // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續
+    // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續。
+    // 退到背景（ON_STOP）也歸還：下載接著跑，Astro 馬上恢復錄影（MainActivity.onStop）；回到 App 再暫停下載、重新停錄
     val streamingNow = current.url.startsWith("http")
-    DisposableEffect(streamingNow) {
-        if (!streamingNow) return@DisposableEffect onDispose { }
+    LifecycleStartEffect(streamingNow) {
+        if (!streamingNow) return@LifecycleStartEffect onStopOrDispose { }
         if (container.downloads.hold()) {
             Toast.makeText(context, "已暫停下載，離開播放畫面後會從中斷處繼續", Toast.LENGTH_SHORT).show()
         }
-        // Astro：串流播放期間維持檔案模式（停錄）；離開後約 10 秒恢復錄影
+        // Astro：串流播放期間維持檔案模式（停錄）
         val lease = container.api.holdFiles("串流播放")
-        onDispose {
+        onStopOrDispose {
             container.downloads.release()
             lease.close()
         }
@@ -324,7 +326,16 @@ fun PlayerScreen(
             }
         }
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) player.pause()
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                // 串流中：暫停時 ExoPlayer 仍會預讀、佔住記錄器的連線（Astro 切回錄影模式後也讀不到），
+                // stop 才會關掉；清單與位置都留著。不會觸發 onPlayerError，也不是播完（STATE_IDLE 不是 ENDED）
+                if (current.url.startsWith("http")) player.stop()
+            } else if (event == Lifecycle.Event.ON_START && player.playbackState == Player.STATE_IDLE) {
+                // 回到 App：重新載入、維持暫停（註冊時立刻收到的 ON_START 播放器還不是 IDLE，不會走到這裡）
+                error = null
+                player.prepare()
+            }
         }
         player.addListener(listener)
         lifecycleOwner.lifecycle.addObserver(observer)

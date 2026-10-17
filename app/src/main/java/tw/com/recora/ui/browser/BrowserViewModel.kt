@@ -58,6 +58,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     private var loadJob: Job? = null
     private var downloadedJob: Job? = null
+    private var playbackJob: Job? = null
 
     /** 使用者自己換過分頁：之後讀到設定也不改回「開啟時顯示的資料夾」。 */
     private var folderPicked = false
@@ -237,7 +238,9 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     /** 取得播放來源：已下載就播手機上的檔案，否則直接從記錄器串流。 */
     fun resolvePlayback(file: DashcamFile, onReady: (String) -> Unit) {
-        viewModelScope.launch {
+        // 上一次還在解析時（例如連點兩下）忽略這次，免得解析兩次、開出兩個播放畫面
+        if (playbackJob?.isActive == true) return
+        playbackJob = viewModelScope.launch {
             val local = withContext(Dispatchers.IO) { runCatching { c.sink.find(file.name, file.isImage) }.getOrNull() }
             if (local != null && !local.pending) {
                 onReady(local.uri.toString())
