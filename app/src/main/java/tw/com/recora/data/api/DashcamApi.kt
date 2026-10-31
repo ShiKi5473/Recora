@@ -31,6 +31,9 @@ interface DashcamApi {
     /** [onDisconnecting] 最多等多久，之後照樣解除綁定。 */
     val disconnectTimeoutMs: Long get() = 3_000L
 
+    /** [onDisconnecting] 失敗時要讓使用者知道的事；null = 失敗了也沒關係。 */
+    val disconnectFailureWarning: String? get() = null
+
     data class SetResult(val ok: Boolean, val body: String)
 
     data class ProbeResult(val ok: Boolean, val detail: String)
@@ -69,6 +72,12 @@ interface DashcamApi {
 
     /** 連線已經結束（網路已解除綁定，不能再送請求）：停掉背景工作、清掉狀態。 */
     fun onDisconnected() {}
+
+    /**
+     * App 退到背景（不是設定變更）時呼叫：畫面拿的 [holdFiles] 都已經歸還，之後 App 隨時可能被關掉。
+     * Astro 不等閒置計時、馬上恢復錄影。佇列還有這台記錄器的檔案要下載時不會呼叫（下載馬上又要停錄）。
+     */
+    suspend fun onAppBackground() {}
 
     suspend fun syncTime(now: ZonedDateTime = ZonedDateTime.now()): SetResult
 

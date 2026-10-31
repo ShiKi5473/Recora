@@ -88,6 +88,39 @@ class AstroSessionTest {
     }
 
     @Test
+    fun leaseReleasedAfterResetSendsNothing() = runTest {
+        // 突然斷線：先 reset（onDisconnected），畫面之後才歸還租約；不能對已經離線的記錄器送恢復指令
+        val fake = Fake(recording = true)
+        val s = session(fake)
+        val lease = s.hold("串流播放")
+        runCurrent()
+        assertEquals(listOf("stop", "playback"), fake.sent)
+        s.reset()
+        lease.close()
+        advanceUntilIdle()
+        assertEquals(listOf("stop", "playback"), fake.sent)
+    }
+
+    @Test
+    fun appBackgroundRestoresOnlyWhatWeChanged() = runTest {
+        val fake = Fake(recording = true)
+        val s = session(fake)
+        s.restoreIfIdle() // 這次連線沒動過記錄器：不送指令
+        assertEquals(emptyList<String>(), fake.sent)
+
+        val lease = s.hold("串流播放")
+        runCurrent()
+        s.restoreIfIdle() // 有人在用檔案：不動
+        assertEquals(listOf("stop", "playback"), fake.sent)
+
+        lease.close()
+        s.restoreIfIdle() // 不等 10 秒
+        assertEquals(listOf("stop", "playback", "movie", "start"), fake.sent)
+        advanceUntilIdle() // 閒置計時到時不會再送一次
+        assertEquals(listOf("stop", "playback", "movie", "start"), fake.sent)
+    }
+
+    @Test
     fun doesNotStartRecordingWeDidNotStop() = runTest {
         val fake = Fake(recording = false)
         val s = session(fake)

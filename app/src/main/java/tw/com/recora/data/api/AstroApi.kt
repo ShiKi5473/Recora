@@ -24,6 +24,7 @@ import tw.com.recora.data.net.await
 import tw.com.recora.ui.Formats
 import java.io.IOException
 import java.time.ZonedDateTime
+import java.util.concurrent.TimeUnit
 
 /**
  * Astro LEO3（Novatek NT96560）的 HTTP 介面（ASTRO_LEO3_API.md）。
@@ -34,10 +35,11 @@ import java.time.ZonedDateTime
 class AstroApi(
     private val client: OkHttpClient,
     private val scope: CoroutineScope,
+    private val formatTimeoutMs: Long = FORMAT_TIMEOUT_MS,
     private val hostProvider: () -> String,
 ) : DashcamApi {
     constructor(client: OkHttpClient, settings: SettingsStore, scope: CoroutineScope) :
-        this(client, scope, { settings.state.value.hostFor(Brand.Astro) })
+        this(client, scope, hostProvider = { settings.state.value.hostFor(Brand.Astro) })
 
     override val brand: Brand get() = Brand.Astro
 
@@ -67,6 +69,9 @@ class AstroApi(
 
     override val disconnectTimeoutMs: Long get() = 8_000L
 
+    override val disconnectFailureWarning: String
+        get() = "中斷連線時連不上記錄器，它可能沒有恢復錄影。請再連線一次（連上時會自動恢復），或重新開機記錄器。"
+
     @Volatile
     private var keepAlive: Job? = null
 
@@ -87,12 +92,13 @@ class AstroApi(
         "http://$host/?custom=1&cmd=$cmd" + (par?.let { "&par=$it" } ?: "") + (str?.let { "&str=$it" } ?: "")
 
     /** 送出指令、回傳原始回應。[quiet] = 不記進「裝置」頁的紀錄（每 5 秒一次的保持連線、很長的列表）。 */
-    suspend fun raw(cmd: Int, par: String? = null, str: String? = null, quiet: Boolean = false): String =
+    suspend fun raw(cmd: Int, par: String? = null, str: String? = null, quiet: Boolean = false, readTimeoutMs: Long? = null): String =
         withContext(Dispatchers.IO) {
             val url = commandUrl(cmd, par, str)
             val query = url.substringAfter('?')
+            val callClient = readTimeoutMs?.let { client.newBuilder().readTimeout(it, TimeUnit.MILLISECONDS).build() } ?: client
             try {
-                client.newCall(Request.Builder().url(url).build()).await().use { resp ->
+                callClient.newCall(Request.Builder().url(url).build()).await().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     if (!quiet || !resp.isSuccessful) DiagLog.log("→ $query ⇒ HTTP ${resp.code}: ${DiagLog.compact(body)}")
                     if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
@@ -123,14 +129,16 @@ class AstroApi(
      * 送 2015&par=1 之後才成功；所以遇到拒絕就先開即時串流再試。
      */
     private suspend fun startRecordingWithRetry() {
+        var status: Int? = null
         repeat(START_ATTEMPTS) { attempt ->
             val reply = command(CMD_RECORD, par = "1")
             if (reply.ok) return
+            status = reply.status
             DiagLog.log("開始錄影被拒絕（Status ${reply.status}，第 ${attempt + 1} 次）")
             runCatching { command(CMD_LIVE, par = "1") }
             delay(START_RETRY_MS)
         }
-        throw RejectedException(CMD_RECORD, null)
+        throw RejectedException(CMD_RECORD, status)
     }
 
     /** 3012 回應要是 Novatek 的 XML 才算：192.168.1.254 也常是家用路由器的位址。 */
@@ -189,6 +197,9 @@ class AstroApi(
         stopKeepAlive()
         session.reset()
     }
+
+    /** 退到背景後 App 可能被滑掉關閉：沒有人在用檔案就不等 10 秒，馬上恢復錄影模式與錄影（只恢復這次連線我們改過的）。 */
+    override suspend fun onAppBackground() = session.restoreIfIdle()
 
     private fun startKeepAlive() {
         val job = scope.launch {
@@ -302,7 +313,7 @@ class AstroApi(
         return when {
             recording && seconds > 0 -> "錄影中（這段已錄 $seconds 秒）"
             recording -> "錄影中"
-            else -> "未錄影$mode"
+            else -> "未錄影$mode" + (session.restoreFailure?.let { "（恢復錄影失敗：$it）" } ?: "")
         }
     }
 
@@ -365,14 +376,31 @@ class AstroApi(
         return null
     }
 
-    /** 3010&par=1（Novatek 慣例，從未在實機上執行過）：送出後等記憶卡狀態回到正常、列表變空。 */
-    override suspend fun formatCard(onProgress: (String) -> Unit): String =
+    /**
+     * 3010&par=1（官方 App 也送這個，但還沒看過記錄器的回應）：回應可能要等格式化做完，所以讀取逾時放寬；
+     * 沒回應不代表沒在格式化，一樣等記憶卡狀態回到正常、列表變空。結束後馬上恢復錄影，恢復不了要讓使用者知道。
+     */
+    override suspend fun formatCard(onProgress: (String) -> Unit): String {
+        val result = runFormat(onProgress)
+        return try {
+            session.restoreNow()
+            result
+        } catch (e: IOException) {
+            "$result。記錄器無法開始錄影：${e.message}"
+        }
+    }
+
+    private suspend fun runFormat(onProgress: (String) -> Unit): String =
         // 整段等待都在「停錄」裡：閒置計時不會在格式化進行中恢復錄影
         session.withRecordingStopped {
-            val reply = command(CMD_FORMAT, par = "1")
-            DiagLog.log("格式化記憶卡：Status ${reply.status}")
-            if (!reply.ok) return@withRecordingStopped "記錄器拒絕格式化（Status ${reply.status}）"
-            val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
+            val reply = try {
+                NovatekParsers.parseReply(raw(CMD_FORMAT, par = "1", readTimeoutMs = formatTimeoutMs))
+            } catch (e: IOException) {
+                null
+            }
+            DiagLog.log("格式化記憶卡：${reply?.let { "Status ${it.status}" } ?: "記錄器沒有回應"}")
+            if (reply != null && !reply.ok) return@withRecordingStopped "記錄器拒絕格式化（Status ${reply.status}）"
+            val deadline = System.currentTimeMillis() + formatTimeoutMs
             while (System.currentTimeMillis() < deadline) {
                 delay(2000)
                 val card = try {
@@ -391,7 +419,11 @@ class AstroApi(
                     if (left > 0) onProgress("記憶卡上還有 $left 個檔案…")
                 }
             }
-            "已送出格式化，但還沒確認完成，請稍後重新整理檔案列表確認"
+            if (reply == null) {
+                "記錄器沒有回應格式化，記憶卡也沒有清空。請再試一次；仍然不行就取出記憶卡，用電腦格式化"
+            } else {
+                "已送出格式化，但還沒確認完成，請稍後重新整理檔案列表確認"
+            }
         }
 
     companion object {
@@ -422,6 +454,7 @@ class AstroApi(
         const val KEEP_ALIVE_MS = 5_000L
         const val START_ATTEMPTS = 3
         const val START_RETRY_MS = 1_500L
-        const val FORMAT_TIMEOUT_MS = 120_000L
+        /** 等 3010 回應、之後再等列表變空，各最多這麼久。 */
+        const val FORMAT_TIMEOUT_MS = 60_000L
     }
 }

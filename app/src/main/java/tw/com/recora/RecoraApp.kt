@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import tw.com.recora.data.Brand
@@ -21,6 +23,7 @@ import tw.com.recora.data.SettingsStore
 import tw.com.recora.data.api.AstroApi
 import tw.com.recora.data.api.DashcamApi
 import tw.com.recora.data.api.MufuApi
+import tw.com.recora.data.net.ConnState
 import tw.com.recora.data.net.DashcamConnection
 import tw.com.recora.data.net.RouteGuard
 import tw.com.recora.download.DownloadFolders
@@ -145,6 +148,13 @@ class AppContainer(val app: Application) {
             }
             // 斷線前（或 App 被關掉前）沒下載完的檔案接著下載
             downloads.resume()
+        }
+        // 中斷連線時先讓下載停在目前位置（重新連上後從中斷處續傳）：MUFU 的 UserDisconnect、Astro 的恢復錄影
+        // 才不會跟下載搶記錄器的連線；突然斷線時也不必對已離線的記錄器重試
+        appScope.launch {
+            connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
+                if (!connected) downloads.pauseForDisconnect()
+            }
         }
     }
 }

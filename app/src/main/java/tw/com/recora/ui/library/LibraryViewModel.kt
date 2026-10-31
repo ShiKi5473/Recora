@@ -73,6 +73,12 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
 
     private var refreshJob: Job? = null
 
+    /**
+     * 這次 App 執行已經自動要求過讀取相片和影片的權限：只自動要求一次。
+     * 否則選了「部分存取」的人每次切到相簿分頁都會跳出選照片的視窗；之後靠畫面上橫幅的「允許」按鈕。
+     */
+    var askedPermission = false
+
     init {
         viewModelScope.launch { c.libraryChanged.collect { refresh() } }
         // 「相簿資料夾」改了

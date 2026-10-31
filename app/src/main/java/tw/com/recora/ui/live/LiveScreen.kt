@@ -43,14 +43,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import tw.com.recora.AppContainer
@@ -110,6 +115,8 @@ fun LiveScreen(container: AppContainer) {
 /**
  * RTSP 即時預覽：串流的準備流程（MUFU 的 streamer／setcamid、Astro 的 2015／3028）都在 [DashcamApi.startLive]，
  * 這裡只播它回傳的網址。走 TCP 在車內 Wi-Fi 較穩。
+ * 退到背景時停掉串流（否則記錄器收到的車內聲音會一直從手機喇叭播出），回到前景再重新開始；
+ * 播放中斷時最多自動重連 [MAX_AUTO_RETRIES] 次。
  * 不要把 `container.api` 存在變數裡：換記錄器後才不會拿到舊的實作。
  */
 @OptIn(UnstableApi::class)
@@ -121,17 +128,30 @@ private fun LivePlayer(
     onFullscreen: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     var viewId by rememberSaveable { mutableIntStateOf(0) }
     var status by remember { mutableStateOf("連線中…") }
     var generation by remember { mutableIntStateOf(0) }
     var url by remember { mutableStateOf("") }
-    val player = remember { ExoPlayer.Builder(context).build() }
+    // 播放中斷後已自動重連的次數與等待中的重連；成功播放、手動重連、切換畫面、回到前景時次數歸零
+    var retries by remember { mutableIntStateOf(0) }
+    var retryJob by remember { mutableStateOf<Job?>(null) }
+    // 退到背景時串流已停掉：回到前景要重新開始，在那之前也不能自動重連
+    var stoppedInBackground by remember { mutableStateOf(false) }
+    val player = remember {
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(LIVE_MIN_BUFFER_MS, LIVE_MAX_BUFFER_MS, LIVE_BUFFER_FOR_PLAYBACK_MS, LIVE_BUFFER_AFTER_REBUFFER_MS)
+            .build()
+        ExoPlayer.Builder(context).setLoadControl(loadControl).build()
+    }
     val views = container.api.liveViews
     val view = views.firstOrNull { it.id == viewId } ?: views.first()
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) retries = 0
                 status = when (state) {
                     Player.STATE_BUFFERING -> "緩衝中…"
                     Player.STATE_READY -> "播放中"
@@ -141,7 +161,18 @@ private fun LivePlayer(
             }
 
             override fun onPlayerError(e: PlaybackException) {
-                status = "無法播放：${e.errorCodeName}"
+                // 退到背景時串流是我們自己停掉的，不重連（回到前景會重新開始）
+                if (stoppedInBackground) return
+                if (retries < MAX_AUTO_RETRIES) {
+                    retries++
+                    status = "連線中斷，重新連線中（第 $retries 次）…"
+                    retryJob = scope.launch {
+                        delay(AUTO_RETRY_DELAY_MS)
+                        generation++
+                    }
+                } else {
+                    status = "無法播放：${e.errorCodeName}"
+                }
             }
         }
         player.addListener(listener)
@@ -152,8 +183,29 @@ private fun LivePlayer(
         }
     }
 
+    // 退到背景：停掉串流並通知記錄器（MUFU 送 streamer=stop）；回到前景再重新開始
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                stoppedInBackground = true
+                retryJob?.cancel()
+                player.stop()
+                container.appScope.launch { ignoreIo { container.api.stopLive() } }
+            } else if (event == Lifecycle.Event.ON_START && stoppedInBackground) {
+                // 註冊 observer 時會馬上收到一次 ON_START，沒停過就不用重新開始
+                stoppedInBackground = false
+                retries = 0
+                generation++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // 切換畫面：先停掉串流 → 重新準備 → 改播記錄器回的網址
     LaunchedEffect(generation, view.id) {
+        // 任何一種重新開始（手動重連、切換畫面、回到前景）都不該再被等待中的自動重連重複觸發
+        retryJob?.cancel()
         status = "連線中…"
         player.stop()
         val source = try {
@@ -162,6 +214,8 @@ private fun LivePlayer(
             status = "無法開始串流：${e.message}"
             return@LaunchedEffect
         }
+        // 準備串流的途中退到背景：不要開始播，回到前景時會重新開始
+        if (stoppedInBackground) return@LaunchedEffect
         url = source.url
         val media = RtspMediaSource.Factory()
             .setForceUseRtpTcp(source.forceTcp)
@@ -175,7 +229,10 @@ private fun LivePlayer(
     }
 
     FullscreenEffect(fullscreen) { onFullscreen(false) }
-    val selectView: (Int) -> Unit = { id -> viewId = id }
+    val selectView: (Int) -> Unit = { id ->
+        viewId = id
+        retries = 0
+    }
     val next = views[(views.indexOf(view) + 1) % views.size]
 
     if (fullscreen) {
@@ -228,7 +285,7 @@ private fun LivePlayer(
                     }
                 }
             }
-            OutlinedButton(onClick = { generation++ }) { Text("重新連線") }
+            OutlinedButton(onClick = { retries = 0; generation++ }) { Text("重新連線") }
             Text(
                 url,
                 style = MaterialTheme.typography.labelSmall,
@@ -275,3 +332,14 @@ private fun LiveVideo(player: ExoPlayer, modifier: Modifier) {
         modifier = modifier,
     )
 }
+
+// 即時畫面的緩衝量：ExoPlayer 預設要先緩衝 2.5 秒才開始播（卡頓後要 5 秒才恢復），畫面會一直落後至少這麼多，
+// 所以縮成 0.5 秒就起播、最多預讀 3 秒。代價是緩衝少，Wi-Fi 不穩時比較容易卡——需要在車上實測再調整數值。
+private const val LIVE_MIN_BUFFER_MS = 1_000
+private const val LIVE_MAX_BUFFER_MS = 3_000
+private const val LIVE_BUFFER_FOR_PLAYBACK_MS = 500
+private const val LIVE_BUFFER_AFTER_REBUFFER_MS = 1_000
+
+/** 播放中斷後自動重連的次數上限，與每次重連前的等待時間。 */
+private const val MAX_AUTO_RETRIES = 2
+private const val AUTO_RETRY_DELAY_MS = 2_000L

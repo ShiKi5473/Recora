@@ -54,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.ForwardingPlayer
@@ -128,27 +130,33 @@ fun PlayerScreen(
     val settings by container.settings.state.collectAsStateWithLifecycle()
     val toast: (String) -> Unit = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
     var error by remember { mutableStateOf<String?>(null) }
+    // 進剪輯頁時這個畫面會整個重建：用 rememberSaveable 記住播到哪一段、哪個時間點，回來時接著播同一段
+    /** 清單裡目前這一段的網址（不是換成另一鏡頭／手機上的網址）。 */
+    var selectedUrl by rememberSaveable { mutableStateOf(url) }
     // 播放清單：來源頁面設定的清單（含目前這段），左右滑動切換；不在清單裡就只播這一段
     var queue by remember {
-        mutableStateOf(container.playQueue.takeIf { q -> q.any { it.url == url } } ?: listOf(PlayItem(url, title)))
+        mutableStateOf(container.playQueue.takeIf { q -> q.any { it.url == selectedUrl } } ?: listOf(PlayItem(url, title)))
     }
-    var index by remember { mutableIntStateOf(queue.indexOfFirst { it.url == url }.coerceAtLeast(0)) }
+    var index by remember { mutableIntStateOf(queue.indexOfFirst { it.url == selectedUrl }.coerceAtLeast(0)) }
     /** 正在播的檔案：清單裡的那一段，或換成了另一個鏡頭、手機上的檔案。 */
-    var current by remember { mutableStateOf(queue[index]) }
+    var current by rememberSaveable(stateSaver = PlayItemSaver) { mutableStateOf(queue[index]) }
     /** 切到了另一個鏡頭：之後左右切換也盡量播另一個鏡頭。 */
-    var otherCamera by remember { mutableStateOf(false) }
+    var otherCamera by rememberSaveable { mutableStateOf(false) }
+    /** 播放位置（每 0.5 秒更新；進剪輯頁時記下確切位置），畫面重建時從這裡接著播。 */
+    var positionMs by rememberSaveable { mutableLongStateOf(0L) }
+    var resumePlaying by rememberSaveable { mutableStateOf(true) }
     // 從記錄器串流的清單用較小的 TS 搜尋範圍（見 dashcamMediaSourceFactory）
     val streaming = remember { queue.any { it.url.startsWith("http") } }
     val player = remember {
         dashcamPlayer(context, container.http, streaming).apply {
-            setMediaItem(mediaItem(current))
+            setMediaItem(mediaItem(current), positionMs)
             // 每段播完停下；要不要接著播下一段由 onEnded 決定
             pauseAtEndOfMediaItems = true
             prepare()
-            playWhenReady = true
+            playWhenReady = resumePlaying
         }
     }
-    var isPlaying by remember { mutableStateOf(true) }
+    var isPlaying by remember { mutableStateOf(resumePlaying) }
     var controlsVisible by remember { mutableStateOf(true) }
     var loadJob by remember { mutableStateOf<Job?>(null) }
     var endHandled by remember { mutableStateOf(false) }
@@ -183,6 +191,7 @@ fun PlayerScreen(
     fun playAt(target: Int) {
         index = target
         val base = queue[target]
+        selectedUrl = base.url
         loadJob?.cancel()
         loadJob = scope.launch {
             val item = (if (otherCamera) counterpart(base) else null) ?: base
@@ -279,16 +288,17 @@ fun PlayerScreen(
         }
     }
 
-    // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續
+    // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續。
+    // 退到背景（ON_STOP）也歸還：下載接著跑，Astro 馬上恢復錄影（MainActivity.onStop）；回到 App 再暫停下載、重新停錄
     val streamingNow = current.url.startsWith("http")
-    DisposableEffect(streamingNow) {
-        if (!streamingNow) return@DisposableEffect onDispose { }
+    LifecycleStartEffect(streamingNow) {
+        if (!streamingNow) return@LifecycleStartEffect onStopOrDispose { }
         if (container.downloads.hold()) {
             Toast.makeText(context, "已暫停下載，離開播放畫面後會從中斷處繼續", Toast.LENGTH_SHORT).show()
         }
-        // Astro：串流播放期間維持檔案模式（停錄）；離開後約 10 秒恢復錄影
+        // Astro：串流播放期間維持檔案模式（停錄）
         val lease = container.api.holdFiles("串流播放")
-        onDispose {
+        onStopOrDispose {
             container.downloads.release()
             lease.close()
         }
@@ -321,7 +331,16 @@ fun PlayerScreen(
             }
         }
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) player.pause()
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                // 串流中：暫停時 ExoPlayer 仍會預讀、佔住記錄器的連線（Astro 切回錄影模式後也讀不到），
+                // stop 才會關掉；清單與位置都留著。不會觸發 onPlayerError，也不是播完（STATE_IDLE 不是 ENDED）
+                if (current.url.startsWith("http")) player.stop()
+            } else if (event == Lifecycle.Event.ON_START && player.playbackState == Player.STATE_IDLE) {
+                // 回到 App：重新載入、維持暫停（註冊時立刻收到的 ON_START 播放器還不是 IDLE，不會走到這裡）
+                error = null
+                player.prepare()
+            }
         }
         player.addListener(listener)
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -333,7 +352,6 @@ fun PlayerScreen(
     }
 
     // 實際錄影時間 = 這段的開始時間 + 播放位置
-    var positionMs by remember { mutableLongStateOf(0L) }
     LaunchedEffect(player) {
         while (true) {
             positionMs = player.currentPosition
@@ -366,6 +384,8 @@ fun PlayerScreen(
             return
         }
         queue = rest
+        // 畫面重建（從剪輯頁回來）時清單由 playQueue 重建，刪掉的那一段也要拿掉
+        container.playQueue = rest
         playAt(removed.coerceAtMost(rest.lastIndex))
     }
 
@@ -470,7 +490,14 @@ fun PlayerScreen(
                     }
                     // 只有手機上的檔案可以剪輯（串流中的記錄器檔案要先下載）
                     if (isLocal(current)) {
-                        IconButton(onClick = { onEdit(current.url, current.title) }) {
+                        IconButton(
+                            onClick = {
+                                // 記下確切的位置與播放狀態，從剪輯頁回來時停在同一段的同一個時間點
+                                positionMs = player.currentPosition
+                                resumePlaying = player.playWhenReady
+                                onEdit(current.url, current.title)
+                            },
+                        ) {
                             Icon(Icons.Filled.ContentCut, contentDescription = "剪輯", tint = Color.White)
                         }
                     }
@@ -544,6 +571,11 @@ fun PlayerScreen(
 }
 
 private fun mediaItem(item: PlayItem): MediaItem = MediaItem.Builder().setUri(item.url).setMediaId(item.url).build()
+
+private val PlayItemSaver = listSaver<PlayItem, String?>(
+    save = { listOf(it.url, it.title, it.sdPath) },
+    restore = { PlayItem(it[0]!!, it[1]!!, it[2]) },
+)
 
 /** 標題列右邊的「更多」：分享（手機上的檔案）、加入下載（記錄器上的檔案）、刪除。 */
 @Composable
