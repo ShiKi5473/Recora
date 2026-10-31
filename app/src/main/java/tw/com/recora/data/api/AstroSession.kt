@@ -45,6 +45,11 @@ class AstroSession(
     var stoppedByUs = false
         private set
 
+    /** 最近一次恢復錄影失敗的原因；恢復成功或連線結束就清掉。 */
+    @Volatile
+    var restoreFailure: String? = null
+        private set
+
     private var holders = 0 // 用 synchronized(this) 保護
     private var idleJob: Job? = null
 
@@ -147,6 +152,7 @@ class AstroSession(
         }
         mode = Mode.Unknown
         stoppedByUs = false
+        restoreFailure = null
     }
 
     private fun acquire() {
@@ -195,13 +201,19 @@ class AstroSession(
 
     /** 呼叫端持有 [mutex]。 */
     private suspend fun restoreLocked() {
-        if (mode != Mode.Movie) {
-            commands.enterMovie()
-            mode = Mode.Movie
-        }
-        if (stoppedByUs) {
-            commands.startRecording()
-            stoppedByUs = false
+        try {
+            if (mode != Mode.Movie) {
+                commands.enterMovie()
+                mode = Mode.Movie
+            }
+            if (stoppedByUs) {
+                commands.startRecording()
+                stoppedByUs = false
+            }
+            restoreFailure = null
+        } catch (e: IOException) {
+            restoreFailure = e.message
+            throw e
         }
     }
 

@@ -25,6 +25,7 @@ import tw.com.recora.data.Clips
 import tw.com.recora.data.DashcamFile
 import tw.com.recora.data.DownloadChoice
 import tw.com.recora.data.Folder
+import tw.com.recora.data.api.DashcamApi
 import tw.com.recora.data.net.ConnState
 import tw.com.recora.download.TaskStatus
 import tw.com.recora.ui.common.DateGroups
@@ -205,32 +206,45 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
     fun delete(clips: List<Clip>, includeRear: Boolean) {
         viewModelScope.launch {
             _ui.update { it.copy(working = true) }
+            var done = 0
             var failed = 0
             var protectedCount = 0
+            var lastError: String? = null
             val deleted = ArrayList<String>()
             for (clip in clips) {
                 var clipOk = true
+                var clipDeleted = false
                 for (f in Clips.filesToDelete(clip, includeRear)) {
-                    // 唯讀的緊急錄影：官方 App 也不刪
+                    // 唯讀的緊急錄影：記錄器一律回 Status -4，送了也刪不掉
                     if (f.readOnly) {
                         protectedCount++
                         continue
                     }
                     // 推算出來的後鏡頭檔不一定存在，刪除失敗不算錯
-                    val ok = try {
-                        c.api.delete(f.sdPath).ok
+                    val result = try {
+                        c.api.delete(f.sdPath)
                     } catch (e: IOException) {
-                        false
+                        DashcamApi.SetResult(false, e.message.orEmpty())
                     }
-                    if (ok) deleted += f.sdPath
-                    if (!ok && !f.guessed) clipOk = false
+                    if (result.ok) {
+                        deleted += f.sdPath
+                        clipDeleted = true
+                    } else if (!f.guessed) {
+                        clipOk = false
+                        lastError = result.body
+                    }
                 }
-                if (!clipOk) failed++
+                if (!clipOk) failed++ else if (clipDeleted) done++
             }
             _ui.update { it.copy(working = false, selection = emptySet()) }
-            val done = clips.size - failed
-            val skipped = if (protectedCount > 0) "；受保護（唯讀）的緊急錄影略過 $protectedCount 個檔案" else ""
-            _messages.trySend((if (failed == 0) "已刪除 $done 段" else "已刪除 $done 段，$failed 段失敗") + skipped)
+            val skipped = if (protectedCount > 0) "緊急錄影被記錄器鎖定，略過 $protectedCount 個檔案（要清除只能格式化記憶卡）" else null
+            _messages.trySend(
+                listOfNotNull(
+                    "已刪除 $done 段".takeIf { done > 0 || failed == 0 && skipped == null },
+                    "$failed 段失敗（$lastError）".takeIf { failed > 0 },
+                    skipped,
+                ).joinToString("；"),
+            )
             c.files.forget(deleted)
             load()
         }

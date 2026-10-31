@@ -117,6 +117,8 @@ def dispatch(handler, query):
         path = (s or "")[2:].replace("\\", "/")
         if st.mode != 2:
             print("    !!! 警告：刪除時不在回放模式")
+        if "/EMERG_" in path:
+            return fn(cmd, -4)  # 實機：ATTR 33 一律拒絕
         return fn(cmd, 0 if store.delete(path) else -1)
     if cmd in (3005, 3006):
         return fn(cmd)

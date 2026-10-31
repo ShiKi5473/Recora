@@ -16,7 +16,7 @@ data class DashcamFile(
     val folder: Folder,
     val guessed: Boolean = false,
     val brand: Brand = Brand.Mufu,
-    /** 記錄器標成唯讀（Astro 的緊急錄影 ATTR 33）：官方 App 刪除時會略過。 */
+    /** 記錄器標成唯讀（Astro 的緊急錄影 ATTR 33）：記錄器拒絕刪除（4003 回 Status -4），本 App 不送。 */
     val readOnly: Boolean = false,
 ) {
     val info: FileNames.Info? = FileNames.parse(name)

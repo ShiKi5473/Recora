@@ -31,6 +31,9 @@ interface DashcamApi {
     /** [onDisconnecting] 最多等多久，之後照樣解除綁定。 */
     val disconnectTimeoutMs: Long get() = 3_000L
 
+    /** [onDisconnecting] 失敗時要讓使用者知道的事；null = 失敗了也沒關係。 */
+    val disconnectFailureWarning: String? get() = null
+
     data class SetResult(val ok: Boolean, val body: String)
 
     data class ProbeResult(val ok: Boolean, val detail: String)
