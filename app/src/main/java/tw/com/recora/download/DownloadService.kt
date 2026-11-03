@@ -92,7 +92,10 @@ class DownloadService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(openAppIntent())
             .addAction(0, "全部取消", cancelIntent())
-        if (running == null) {
+        if (running == null && repo.isHeld) {
+            // 串流播放、即時畫面、送指令時暫停（服務留著），恢復後從中斷處繼續
+            builder.setContentTitle("下載暫停中").setContentText(if (queued > 0) "還有 $queued 個，稍後自動繼續" else null)
+        } else if (running == null) {
             builder.setContentTitle("準備下載…").setProgress(0, 0, true)
         } else {
             val text = buildString {

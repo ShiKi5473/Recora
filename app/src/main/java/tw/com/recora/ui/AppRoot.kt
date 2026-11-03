@@ -52,7 +52,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import tw.com.recora.AppContainer
-import tw.com.recora.data.MediaKind
+import tw.com.recora.data.PlayItem
 import tw.com.recora.ui.browser.BrowserScreen
 import tw.com.recora.ui.common.Immersive
 import tw.com.recora.ui.device.DeviceScreen
@@ -195,11 +195,11 @@ fun AppRoot(container: AppContainer) {
                     uri = entry.arguments?.getString("uri").orEmpty(),
                     title = entry.arguments?.getString("title").orEmpty(),
                     onBack = { nav.popBackStack() },
-                    onOpenLibrary = {
-                        container.libraryTabRequest.value = MediaKind.Edited
-                        nav.navigate("library") {
-                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
+                    // 匯出完直接播剪好的影片；剪輯畫面從返回堆疊移除，返回時回到開剪輯之前的畫面
+                    onOpenExported = { exportedUri, exportedTitle ->
+                        container.playQueue = listOf(PlayItem(exportedUri, exportedTitle))
+                        nav.navigate(playerRoute(exportedUri, exportedTitle)) {
+                            popUpTo(EDITOR_ROUTE) { inclusive = true }
                         }
                     },
                 )

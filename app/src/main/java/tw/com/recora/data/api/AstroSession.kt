@@ -63,6 +63,24 @@ class AstroSession(
         return Lease(::release)
     }
 
+    /**
+     * 同 [hold]，但等停錄、切到回放模式完成才回傳（串流播放：模式切好才開始讀檔）。
+     * 切換失敗只記錄、照樣回傳，之後的請求失敗時由呼叫端處理。
+     */
+    suspend fun awaitHold(reason: String): Lease {
+        acquire()
+        val lease = Lease(::release)
+        try {
+            ensureFiles()
+        } catch (e: IOException) {
+            DiagLog.log("切換到檔案模式失敗（$reason）：${e.message}")
+        } catch (e: Throwable) {
+            lease.close()
+            throw e
+        }
+        return lease
+    }
+
     /** 在檔案模式下執行 [block]：等停錄、切到回放模式完成才開始。 */
     suspend fun <T> withFiles(block: suspend () -> T): T {
         acquire()

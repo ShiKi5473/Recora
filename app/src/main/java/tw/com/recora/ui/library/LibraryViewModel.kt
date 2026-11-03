@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -83,13 +82,6 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
             c.downloads.tasks.map { tasks -> tasks.count { it.status == TaskStatus.Done } }
                 .distinctUntilChanged()
                 .collect { refresh() }
-        }
-        // 例如剪輯匯出後按「到相簿查看」，要直接顯示「已剪輯」
-        viewModelScope.launch {
-            c.libraryTabRequest.filterNotNull().collect { kind ->
-                _ui.update { it.copy(tab = kind) }
-                c.libraryTabRequest.value = null
-            }
         }
     }
 

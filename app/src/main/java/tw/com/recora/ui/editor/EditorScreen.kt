@@ -124,7 +124,8 @@ fun EditorScreen(
     uri: String,
     title: String,
     onBack: () -> Unit,
-    onOpenLibrary: () -> Unit,
+    /** 匯出完按「播放」：開播放畫面播剪好的影片（content:// 網址、檔名）。 */
+    onOpenExported: (uri: String, title: String) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -426,6 +427,8 @@ fun EditorScreen(
         exportProgress = 0
         exportJob = scope.launch {
             val saved = ArrayList<String>()
+            /** 第一支存好的影片（網址、檔名），匯出完按「播放」就播它。 */
+            var firstSaved: Pair<String, String>? = null
             var failure: String? = null
             try {
                 for ((i, output) in outputs.withIndex()) {
@@ -462,7 +465,7 @@ fun EditorScreen(
                         }
                     }
                     try {
-                        withContext(Dispatchers.IO) {
+                        val savedUri = withContext(Dispatchers.IO) {
                             try {
                                 container.sink.saveFile(file, name, "video/mp4", isImage = false)
                             } finally {
@@ -470,6 +473,7 @@ fun EditorScreen(
                             }
                         }
                         saved += name
+                        if (firstSaved == null) firstSaved = savedUri.toString() to name
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -491,10 +495,11 @@ fun EditorScreen(
             } else {
                 val action = snackbar.showSnackbar(
                     "已匯出 ${saved.joinToString("、")}",
-                    actionLabel = "到相簿查看",
+                    actionLabel = "播放",
                     duration = SnackbarDuration.Long,
                 )
-                if (action == SnackbarResult.ActionPerformed) onOpenLibrary()
+                val exported = firstSaved
+                if (action == SnackbarResult.ActionPerformed && exported != null) onOpenExported(exported.first, exported.second)
             }
         }
     }
@@ -761,6 +766,10 @@ fun EditorScreen(
                         settings = settings,
                         update = { transform -> container.appScope.launch { container.settings.update(transform) } },
                         showMuteDefault = false,
+                        qualityBitrate = { q ->
+                            val spec = outputSpec(settings)
+                            ExportOptions.videoBitrate(spec.width, spec.height, spec.fps, spec.codec, q)
+                        },
                     )
                     Text(
                         "改的是「App 設定」裡的值，之後的剪輯也會沿用。",

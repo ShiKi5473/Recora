@@ -259,6 +259,8 @@ class AstroApi(
 
     override fun holdFiles(reason: String): Lease = session.hold(reason)
 
+    override suspend fun awaitFiles(reason: String): Lease = session.awaitHold(reason)
+
     override suspend fun <T> withFiles(block: suspend () -> T): T = session.withFiles(block)
 
     /** 3028 的 0–3：官方 App 的切換鍵依序循環，各是哪個畫面待實測（ASTRO_LEO3_API.md §2.7）。 */
@@ -292,18 +294,19 @@ class AstroApi(
      */
     override suspend fun stopLive() {}
 
-    override suspend fun recordingStatus(): String {
+    override suspend fun recordingStatus(): DashcamApi.RecordingStatus {
         val recording = isRecordingNow()
         val seconds = command(CMD_RECORD_TIME, quiet = true).value?.toLongOrNull() ?: 0
         val mode = when (session.mode) {
             AstroSession.Mode.Files -> "（檔案模式，離開檔案頁約 10 秒後恢復錄影）"
             else -> ""
         }
-        return when {
+        val text = when {
             recording && seconds > 0 -> "錄影中（這段已錄 $seconds 秒）"
             recording -> "錄影中"
             else -> "未錄影$mode"
         }
+        return DashcamApi.RecordingStatus(recording, text)
     }
 
     override suspend fun cardStatus(): String {

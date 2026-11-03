@@ -35,6 +35,9 @@ interface DashcamApi {
 
     data class ProbeResult(val ok: Boolean, val detail: String)
 
+    /** 錄影狀態：[recording] = 正在錄影（裝置頁的紅點），[text] 給使用者看。 */
+    data class RecordingStatus(val recording: Boolean, val text: String)
+
     data class StorageInfo(
         /** 記錄器回報的總容量 / 剩餘容量（例如 "117.0G"），讀不到為 null。 */
         val total: String?,
@@ -92,6 +95,9 @@ interface DashcamApi {
      */
     fun holdFiles(reason: String): Lease = Lease.NONE
 
+    /** 同 [holdFiles]，但等模式切換完成才回傳。 */
+    suspend fun awaitFiles(reason: String): Lease = holdFiles(reason)
+
     /** 在「用檔案」的狀態下執行 [block]（等模式切換完成；見 [holdFiles]）。 */
     suspend fun <T> withFiles(block: suspend () -> T): T = block()
 
@@ -106,8 +112,8 @@ interface DashcamApi {
     /** 離開即時畫面。 */
     suspend fun stopLive() {}
 
-    /** 錄影狀態（顯示用文字），韌體不支援時回 null。 */
-    suspend fun recordingStatus(): String?
+    /** 錄影狀態，韌體不支援時回 null。 */
+    suspend fun recordingStatus(): RecordingStatus?
 
     /** 記憶卡狀態（顯示用文字）。 */
     suspend fun cardStatus(): String?

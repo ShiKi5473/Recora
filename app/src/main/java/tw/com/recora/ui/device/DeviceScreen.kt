@@ -126,7 +126,7 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
             if (connected) {
                 Section("錄影", Icons.Filled.Videocam) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (ui.recordStatus?.contains("recording", ignoreCase = true) == true) {
+                        if (ui.recording) {
                             Box(Modifier.size(8.dp).background(MaterialTheme.recora.recordDot, CircleShape))
                         }
                         Text("目前狀態：${ui.recordStatus ?: "讀取中…"}")

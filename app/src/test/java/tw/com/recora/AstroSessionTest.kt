@@ -78,6 +78,21 @@ class AstroSessionTest {
     }
 
     @Test
+    fun awaitHoldReturnsAfterModeSwitchAndKeepsItUntilClosed() = runTest {
+        val fake = Fake(recording = true)
+        val s = session(fake)
+        val lease = s.awaitHold("test")
+        // 不用 runCurrent：回傳時已經切好了（串流播放要等這個才開始讀檔）
+        assertEquals(listOf("stop", "playback"), fake.sent)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(listOf("stop", "playback"), fake.sent)
+        lease.close()
+        advanceUntilIdle()
+        assertEquals(listOf("stop", "playback", "movie", "start"), fake.sent)
+    }
+
+    @Test
     fun disconnectRestoresImmediately() = runTest {
         val fake = Fake(recording = true)
         val s = session(fake)

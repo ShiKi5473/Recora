@@ -81,6 +81,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -110,6 +111,7 @@ import tw.com.recora.ui.common.ZoomState
 import tw.com.recora.ui.common.captureFrame
 import tw.com.recora.ui.common.isDeletable
 import tw.com.recora.ui.common.isLocal
+import tw.com.recora.ui.common.rememberDashcamGrant
 import tw.com.recora.ui.common.rememberMediaDeleter
 import tw.com.recora.ui.common.shareMedia
 import tw.com.recora.ui.common.zoomGestures
@@ -137,24 +139,34 @@ fun PlayerScreen(
     val settings by container.settings.state.collectAsStateWithLifecycle()
     val toast: (String) -> Unit = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
     var error by remember { mutableStateOf<String?>(null) }
-    // 播放清單：來源頁面設定的清單（含目前這段），左右滑動切換；不在清單裡就只播這一段
-    var queue by remember {
-        mutableStateOf(container.playQueue.takeIf { q -> q.any { it.url == url } } ?: listOf(PlayItem(url, title)))
+    // 清單與目前位置跟著返回堆疊保存（見 PlayerSession）：去剪輯再回來仍停在剛才那一段
+    val session = viewModel {
+        // 播放清單：來源頁面設定的清單（含目前這段），左右滑動切換；不在清單裡就只播這一段
+        val q = container.playQueue.takeIf { q -> q.any { it.url == url } } ?: listOf(PlayItem(url, title))
+        PlayerSession(q, q.indexOfFirst { it.url == url }.coerceAtLeast(0))
     }
-    var index by remember { mutableIntStateOf(queue.indexOfFirst { it.url == url }.coerceAtLeast(0)) }
-    /** 正在播的檔案：清單裡的那一段，或換成了另一個鏡頭、手機上的檔案。 */
-    var current by remember { mutableStateOf(queue[index]) }
-    /** 切到了另一個鏡頭：之後左右切換也盡量播另一個鏡頭。 */
-    var otherCamera by remember { mutableStateOf(false) }
+    var queue by session::queue
+    var index by session::index
+    var current by session::current
+    var otherCamera by session::otherCamera
     // 從記錄器串流的清單用較小的 TS 搜尋範圍（見 dashcamMediaSourceFactory）
     val streaming = remember { queue.any { it.url.startsWith("http") } }
+    // 記錄器一次只服務一個連線：從記錄器串流時先取得使用權（暫停下載佇列、Astro 停錄並切到回放模式），
+    // 拿到之後才開始載入；進背景、離開或改播手機上的檔案時歸還，下載從中斷處繼續
+    val dashcamReady = rememberDashcamGrant(
+        container,
+        reason = "正在播放記錄器上的影片",
+        enabled = current.url.startsWith("http"),
+        files = true,
+    ) { toast("已暫停下載，離開播放畫面後會從中斷處繼續") }
     val player = remember {
         dashcamPlayer(context, container.http, streaming).apply {
-            setMediaItem(mediaItem(current))
+            setMediaItem(mediaItem(current), session.resumePositionMs)
             // 每段播完停下；要不要接著播下一段由 onEnded 決定
             pauseAtEndOfMediaItems = true
-            prepare()
-            playWhenReady = true
+            // 記錄器上的檔案等拿到使用權才載入（見下方 LaunchedEffect(dashcamReady.value)）
+            if (!current.url.startsWith("http")) prepare()
+            playWhenReady = session.resumePlaying
         }
     }
     var isPlaying by remember { mutableStateOf(true) }
@@ -190,8 +202,11 @@ fun PlayerScreen(
         current = item
         error = null
         endHandled = false
+        // 記錄器上的檔案要等拿到使用權才載入：先停掉，免得換了網址就馬上開始讀
+        val wait = item.url.startsWith("http") && !dashcamReady.value
+        if (wait) player.stop()
         player.setMediaItem(mediaItem(item), positionMs)
-        player.prepare()
+        if (!wait) player.prepare()
         player.playWhenReady = autoPlay
     }
 
@@ -206,9 +221,10 @@ fun PlayerScreen(
         }
     }
 
+    /** 換段：[delta] > 0 播錄影時間的下一段（較新），< 0 播上一段（較舊）。清單是新到舊排列，所以不是 index ± 1。 */
     fun jump(delta: Int) {
-        val target = index + delta
-        if (target !in queue.indices) {
+        val target = if (delta > 0) PlayOrder.nextInTime(queue, index) else PlayOrder.previousInTime(queue, index)
+        if (target == null) {
             toast(if (delta > 0) "已經是最後一段" else "已經是第一段")
             return
         }
@@ -263,23 +279,25 @@ fun PlayerScreen(
         toast(if (added > 0) "已加入下載佇列，離開播放畫面後開始下載" else "這個檔案已在下載佇列中")
     }
 
+    // 錄影時間的上一段 / 下一段（控制列每 200ms 重組，這裡只在換段或清單變動時重算）
+    val previousIndex = remember(queue, index) { PlayOrder.previousInTime(queue, index) }
+    val nextIndex = remember(queue, index) { PlayOrder.nextInTime(queue, index) }
+
     /** 上一段：播了一段時間先回到開頭，否則換到上一段（同 ExoPlayer 內建控制列的行為）。 */
     fun previousOrRestart() {
-        if (index <= 0 || player.currentPosition > RESTART_THRESHOLD_MS) player.seekTo(0) else jump(-1)
+        if (previousIndex == null || player.currentPosition > RESTART_THRESHOLD_MS) player.seekTo(0) else jump(-1)
     }
 
-    // 記錄器一次只服務一個連線：從記錄器串流時先暫停下載佇列，離開或改播手機上的檔案時再繼續
-    val streamingNow = current.url.startsWith("http")
-    DisposableEffect(streamingNow) {
-        if (!streamingNow) return@DisposableEffect onDispose { }
-        if (container.downloads.hold()) {
-            Toast.makeText(context, "已暫停下載，離開播放畫面後會從中斷處繼續", Toast.LENGTH_SHORT).show()
-        }
-        // Astro：串流播放期間維持檔案模式（停錄）；離開後約 10 秒恢復錄影
-        val lease = container.api.holdFiles("串流播放")
-        onDispose {
-            container.downloads.release()
-            lease.close()
+    // 拿到記錄器的使用權才開始載入串流；歸還時（App 進背景）停止載入、把連線讓給下載，回來再從同一個位置接著載入
+    LaunchedEffect(dashcamReady.value) {
+        if (!current.url.startsWith("http")) return@LaunchedEffect
+        if (dashcamReady.value) {
+            if (player.playbackState == Player.STATE_IDLE) {
+                error = null
+                player.prepare()
+            }
+        } else {
+            player.stop()
         }
     }
 
@@ -316,6 +334,9 @@ fun PlayerScreen(
         player.addListener(listener)
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            // 去剪輯等畫面再回來時從這裡繼續（見 PlayerSession）
+            session.resumePositionMs = player.currentPosition
+            session.resumePlaying = player.playWhenReady
             lifecycleOwner.lifecycle.removeObserver(observer)
             player.removeListener(listener)
             player.release()
@@ -504,8 +525,8 @@ fun PlayerScreen(
                 isPlaying = isPlaying,
                 positionMs = positionMs,
                 durationMs = durationMs,
-                hasPrevious = index > 0,
-                hasNext = index < queue.lastIndex,
+                hasPrevious = previousIndex != null,
+                hasNext = nextIndex != null,
                 switchCameraLabel = if (FileNames.counterpartName(current.title) != null) {
                     if (FileNames.cameraOfName(current.title) != Camera.Rear) "切到後鏡頭" else "切到前鏡頭"
                 } else {
@@ -627,7 +648,8 @@ private fun MoreMenu(
 }
 
 /**
- * 左右滑動切換影片：在 Initial 階段觀察手勢（不攔截），播放器的點擊、控制列照常運作；
+ * 左右滑動切換影片：由右往左滑傳 +1（錄影時間的下一段，較新），由左往右滑傳 -1（較舊）。
+ * 在 Initial 階段觀察手勢（不攔截），播放器的點擊、控制列照常運作；
  * 從畫面下方 1/4（進度條所在）開始的拖曳不算，才不會跟拖曳進度條衝突。
  * 放大中（[enabled] 為 false）或用了兩根以上手指（捏合縮放）時不切換。
  */

@@ -15,12 +15,13 @@ import okhttp3.OkHttpClient
 import tw.com.recora.data.Brand
 import tw.com.recora.data.DashcamFiles
 import tw.com.recora.data.DiagLog
-import tw.com.recora.data.MediaKind
 import tw.com.recora.data.PlayItem
 import tw.com.recora.data.SettingsStore
 import tw.com.recora.data.api.AstroApi
 import tw.com.recora.data.api.DashcamApi
+import tw.com.recora.data.api.GuardedDashcamApi
 import tw.com.recora.data.api.MufuApi
+import tw.com.recora.data.net.DashcamAccess
 import tw.com.recora.data.net.DashcamConnection
 import tw.com.recora.data.net.RouteGuard
 import tw.com.recora.download.DownloadFolders
@@ -54,11 +55,11 @@ class RecoraApp : Application(), ImageLoaderFactory {
 
     /**
      * 相簿縮圖用系統的縮圖快取（[MediaThumbFetcher]），其他影片能解出某一格（coil-video）；
-     * 記錄器上的照片走共用的 client（受 RouteGuard 保護）。
+     * 記錄器上的照片走共用的 client（受 RouteGuard 保護），並經過記錄器的使用權（讀照片時暫停下載）。
      */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
-            .okHttpClient { container.http }
+            .okHttpClient { container.http.newBuilder().addInterceptor(container.access.interceptor).build() }
             .components {
                 add(MediaThumbFetcher.Factory())
                 add(MediaThumbFetcher.Key())
@@ -85,14 +86,9 @@ class AppContainer(val app: Application) {
     private fun apiOf(brand: Brand): DashcamApi = apis[brand] ?: apis.getValue(Brand.Mufu)
     val connection = DashcamConnection(app, apis, settings, appScope)
 
-    /**
-     * 目前的記錄器介面：連著的那一種，否則連線卡片選的。每次使用時才取，
-     * 不要存在長壽命的變數裡（換品牌後會拿到舊的實作）。
-     */
-    val api: DashcamApi get() = apiOf(connection.currentBrand)
-
-    val files = DashcamFiles({ api }, connection, appScope).also { astro.onRecordingResumed = it::invalidateAll }
     val sink = MediaStoreSink(app, { settings.state.value.libraryFolders }, { settings.state.value.albumDir })
+
+    /** 下載佇列用未包裝的實作：它自己就是 [access] 要暫停的對象。 */
     val downloads = DownloadRepository(
         app, ::apiOf, sink, http, appScope,
         queueStore = QueueStore(File(app.filesDir, "download_queue.tsv")),
@@ -101,6 +97,18 @@ class AppContainer(val app: Application) {
         // 兩個條件都要：斷線的瞬間（狀態還沒更新但已解除綁定）不會一直重跑被 RouteGuard 擋下的檔案
         if (connection.isConnected && connection.canReachDashcam) connection.boundBrand else null
     }
+
+    /** 記錄器的使用權（一次只服務一個連線）：指令、串流、即時畫面優先，下載讓路。 */
+    val access = DashcamAccess(downloads, { apiOf(connection.currentBrand) }, appScope)
+    private val guarded: Map<Brand, DashcamApi> = apis.mapValues { GuardedDashcamApi(it.value, access) }
+
+    /**
+     * 目前的記錄器介面：連著的那一種，否則連線卡片選的。每次使用時才取，
+     * 不要存在長壽命的變數裡（換品牌後會拿到舊的實作）。每個呼叫都經過 [access]。
+     */
+    val api: DashcamApi get() = guarded[connection.currentBrand] ?: guarded.getValue(Brand.Mufu)
+
+    val files = DashcamFiles({ api }, connection, appScope).also { astro.onRecordingResumed = it::invalidateAll }
     val eventBackup = EventBackup(files, sink, downloads, settings)
 
     /** 相簿內容變了（匯出、刪除）時通知相簿分頁重新整理。 */
@@ -113,24 +121,21 @@ class AppContainer(val app: Application) {
     @Volatile
     var playQueue: List<PlayItem> = emptyList()
 
-    /** 下一次打開相簿分頁時要顯示哪一類（例如匯出後跳到「已剪輯」）。 */
-    val libraryTabRequest = MutableStateFlow<MediaKind?>(null)
-
     /** debug 用：校正腳本指定的剪輯匯出，AppRoot 收到後開剪輯畫面（見 MainActivity.handleDebugIntent）。 */
     val calibrationJob = MutableStateFlow<CalibrationJob?>(null)
 
     init {
         connection.onConnected = { dashcam ->
-            // 同官方 App：每次連上都把手機時間寫入記錄器
+            // 同官方 App：每次連上都把手機時間寫入記錄器（跟同時開著的頁面讀列表、狀態排隊，不同時送）
             try {
-                val sync = dashcam.syncTime()
+                val sync = access.command { dashcam.syncTime() }
                 DiagLog.log("對時：${if (sync.ok) "成功" else "失敗"}（${DiagLog.compact(sync.body, 80)}）")
             } catch (e: IOException) {
                 // 對時失敗不影響其他功能
             }
             // Astro：保持連線、確認記錄器有在錄影
             try {
-                dashcam.onConnected()
+                access.command { dashcam.onConnected() }
             } catch (e: IOException) {
                 DiagLog.log("連線後初始化失敗：${e.message}")
             }

@@ -29,6 +29,8 @@ import java.time.format.DateTimeFormatter
 data class DeviceUi(
     /** 記錄器回報的錄影狀態（MUFU：Recording / Standby…；Astro：錄影中…），null = 未讀取。 */
     val recordStatus: String? = null,
+    /** 正在錄影（狀態旁的紅點）。 */
+    val recording: Boolean = false,
     /** 記憶卡狀態（MUFU：READY / FORMAT_ING…；Astro：正常）。 */
     val cardStatus: String? = null,
     val formatting: Boolean = false,
@@ -78,7 +80,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
             }
             // 記錄器一次只服務一個連線：狀態、容量依序讀，不同時送
             val record = readRecordStatus()
-            _ui.update { it.copy(recordStatus = record) }
+            _ui.update { it.copy(recordStatus = record.text, recording = record.recording) }
             val card = readCardStatus()
             _ui.update { it.copy(cardStatus = card) }
             if (_ui.value.usage == null) refreshUsage()
@@ -163,15 +165,15 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
     fun refreshRecordStatus() {
         viewModelScope.launch {
             val status = readRecordStatus()
-            _ui.update { it.copy(recordStatus = status) }
+            _ui.update { it.copy(recordStatus = status.text, recording = status.recording) }
         }
     }
 
-    private suspend fun readRecordStatus(): String =
+    private suspend fun readRecordStatus(): DashcamApi.RecordingStatus =
         try {
-            c.api.recordingStatus() ?: "記錄器沒有回報"
+            c.api.recordingStatus() ?: DashcamApi.RecordingStatus(recording = false, text = "記錄器沒有回報")
         } catch (e: IOException) {
-            "讀取失敗：${e.message}"
+            DashcamApi.RecordingStatus(recording = false, text = "讀取失敗：${e.message}")
         }
 
     /** 修改記錄器設定，讀回確認是否真的套用。 */

@@ -19,8 +19,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import android.widget.Toast
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -58,7 +58,7 @@ import tw.com.recora.data.Camera
 import tw.com.recora.data.api.ignoreIo
 import tw.com.recora.data.net.ConnState
 import tw.com.recora.ui.common.ConnectionChip
-import tw.com.recora.ui.common.MessagePane
+import tw.com.recora.ui.common.rememberDashcamGrant
 import tw.com.recora.ui.common.NotConnectedPane
 import tw.com.recora.ui.theme.Scrim
 import tw.com.recora.ui.theme.recora
@@ -83,9 +83,8 @@ import java.io.IOException
 @Composable
 fun LiveScreen(container: AppContainer) {
     val conn by container.connection.state.collectAsStateWithLifecycle()
-    val downloading by container.downloads.active.collectAsStateWithLifecycle()
     var fullscreen by rememberSaveable { mutableStateOf(false) }
-    val canPlay = conn is ConnState.Connected && !downloading
+    val canPlay = conn is ConnState.Connected
     val full = fullscreen && canPlay
     Scaffold(
         topBar = {
@@ -96,12 +95,6 @@ fun LiveScreen(container: AppContainer) {
         val modifier = Modifier.padding(pad)
         when {
             conn !is ConnState.Connected -> NotConnectedPane(container, modifier)
-            downloading -> MessagePane(
-                icon = Icons.Filled.Download,
-                title = "下載進行中",
-                text = "即時畫面和下載會互搶記錄器的頻寬，下載完成後再來看。",
-                modifier = modifier,
-            )
             else -> LivePlayer(container, modifier, full) { fullscreen = it }
         }
     }
@@ -111,6 +104,7 @@ fun LiveScreen(container: AppContainer) {
  * RTSP 即時預覽：串流的準備流程（MUFU 的 streamer／setcamid、Astro 的 2015／3028）都在 [DashcamApi.startLive]，
  * 這裡只播它回傳的網址。走 TCP 在車內 Wi-Fi 較穩。
  * 不要把 `container.api` 存在變數裡：換記錄器後才不會拿到舊的實作。
+ * 即時畫面和下載會互搶記錄器的連線：畫面在前景時拿著使用權（下載暫停），進背景或離開就停掉串流、讓下載繼續。
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -128,6 +122,9 @@ private fun LivePlayer(
     val player = remember { ExoPlayer.Builder(context).build() }
     val views = container.api.liveViews
     val view = views.firstOrNull { it.id == viewId } ?: views.first()
+    val ready by rememberDashcamGrant(container, reason = "正在看即時畫面") {
+        Toast.makeText(context, "已暫停下載，離開即時畫面後會從中斷處繼續", Toast.LENGTH_SHORT).show()
+    }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -152,10 +149,19 @@ private fun LivePlayer(
         }
     }
 
-    // 切換畫面：先停掉串流 → 重新準備 → 改播記錄器回的網址
-    LaunchedEffect(generation, view.id) {
+    // 切換畫面：先停掉串流 → 重新準備 → 改播記錄器回的網址。沒拿到使用權（剛進來、App 在背景）時只停掉串流
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(generation, view.id, ready) {
         status = "連線中…"
         player.stop()
+        if (!ready) {
+            if (started) {
+                started = false
+                ignoreIo { container.api.stopLive() }
+            }
+            return@LaunchedEffect
+        }
+        started = true
         val source = try {
             container.api.startLive(view)
         } catch (e: IOException) {

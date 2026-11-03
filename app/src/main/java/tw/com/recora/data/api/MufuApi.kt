@@ -106,9 +106,11 @@ class MufuApi(
      * 讀取錄影狀態（此系列韌體的預覽狀態：Camera.Preview.MJPEG.status.record = Recording / Standby…）。
      * 韌體不支援時回 null。
      */
-    override suspend fun recordingStatus(): String? {
+    override suspend fun recordingStatus(): DashcamApi.RecordingStatus? {
         val props = getProperties("Camera.Preview.MJPEG.status.*")
-        return props.entries.firstOrNull { it.key.endsWith(".record", ignoreCase = true) }?.value
+        // 記錄器回報 Recording / Standby…
+        val value = props.entries.firstOrNull { it.key.endsWith(".record", ignoreCase = true) }?.value ?: return null
+        return DashcamApi.RecordingStatus(recording = value.contains("recording", ignoreCase = true), text = value)
     }
     suspend fun streamerStart() = set("streamer", "start")
     suspend fun streamerStop() = set("streamer", "stop")

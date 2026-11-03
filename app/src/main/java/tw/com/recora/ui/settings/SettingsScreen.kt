@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import tw.com.recora.AppContainer
 import tw.com.recora.data.AppSettings
@@ -182,7 +183,13 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
 
 /** 剪輯匯出的設定；「App 設定」頁與剪輯頁的對話框共用。 */
 @Composable
-fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMuteDefault: Boolean = true) {
+fun ExportSettingsFields(
+    settings: AppSettings,
+    update: SettingsUpdate,
+    showMuteDefault: Boolean = true,
+    /** 各畫質要求編碼器的影像位元率（bps），有給的話標在選項上；剪輯頁才知道解析度與影格率。 */
+    qualityBitrate: ((ExportQuality) -> Int)? = null,
+) {
     val hevc = ClipExporter.hevcEncoderAvailable
     val codec = if (settings.exportCodec == ExportCodec.H265 && !hevc) ExportCodec.H264 else settings.exportCodec
     val reencode = codec != ExportCodec.Original
@@ -213,11 +220,19 @@ fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMute
         title = "畫質",
         options = ExportQuality.entries,
         selected = settings.exportQuality,
-        optionLabel = { it.label },
+        optionLabel = { q -> qualityBitrate?.let { "${q.label}・${formatMbps(it(q))}" } ?: q.label },
         onSelect = { q -> update { it.copy(exportQuality = q) } },
-        hint = if (reencode) "「省空間」適合用通訊軟體分享" else "不重新編碼時跟原檔一樣",
+        hint = if (reencode) {
+            "「省空間」適合用通訊軟體分享" + if (qualityBitrate != null) "；位元率是要求編碼器的影像目標，實際會隨畫面內容浮動" else ""
+        } else {
+            "不重新編碼時跟原檔一樣"
+        },
         enabled = reencode,
-        selectedLabel = if (reencode) settings.exportQuality.label else "同原檔",
+        selectedLabel = when {
+            !reencode -> "同原檔"
+            qualityBitrate != null -> "${settings.exportQuality.label}・${formatMbps(qualityBitrate(settings.exportQuality))}"
+            else -> settings.exportQuality.label
+        },
     )
     if (showMuteDefault) {
         SwitchRow(
@@ -226,6 +241,12 @@ fun ExportSettingsFields(settings: AppSettings, update: SettingsUpdate, showMute
             checked = settings.exportMute,
         ) { v -> update { it.copy(exportMute = v) } }
     }
+}
+
+/** 位元率顯示成 Mbps：10 以上取整數，其餘一位小數。 */
+private fun formatMbps(bps: Int): String {
+    val mbps = bps / 1_000_000.0
+    return if (mbps >= 10) "約 ${mbps.roundToInt()} Mbps" else "約 ${"%.1f".format(mbps)} Mbps"
 }
 
 /** 存檔資料夾：下載、匯出、截圖存到 Movies／Pictures 底下的哪個資料夾。 */

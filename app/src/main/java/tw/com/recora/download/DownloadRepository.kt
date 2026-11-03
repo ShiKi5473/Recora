@@ -10,7 +10,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +25,7 @@ import okhttp3.OkHttpClient
 import tw.com.recora.data.Brand
 import tw.com.recora.data.DashcamFile
 import tw.com.recora.data.api.DashcamApi
+import tw.com.recora.data.net.DashcamAccess
 import tw.com.recora.data.net.DashcamOfflineException
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -62,7 +65,7 @@ class DownloadRepository(
     private val subdirOf: (DashcamFile) -> String? = { null },
     /** 目前連著（而且請求真的到得了）的記錄器，沒有則為 null。 */
     private val connectedBrand: () -> Brand?,
-) {
+) : DashcamAccess.Downloads {
     private val downloader = RangeDownloader(
         httpClient.newBuilder().readTimeout(30, TimeUnit.SECONDS).build(),
     )
@@ -84,6 +87,10 @@ class DownloadRepository(
     /** 因 [hold] 而中斷的那個檔案：回到等待中，而不是變成「已取消」。 */
     @Volatile
     private var pausingId: String? = null
+
+    /** 最近一次 [hold] 的原因，顯示在被中斷的檔案上。 */
+    @Volatile
+    private var holdReason = ""
 
     /** 佇列目前是否因 [hold] 暫停（通知用：暫停不算下載結束）。 */
     val isHeld: Boolean get() = holds.value > 0
@@ -147,20 +154,28 @@ class DownloadRepository(
 
     /**
      * 暫停佇列直到 [release]。記錄器一次只服務一個連線，串流播放時下載會跟播放器互搶而一起斷線；
-     * 正在下載的檔案停在目前位置，之後從中斷處續傳。
-     * @return 是否真的有下載被暫停（呼叫端用來提示使用者）
+     * 正在下載的檔案停在目前位置，之後從中斷處續傳。一般不直接呼叫，由 DashcamAccess 統一管理。
+     * [reason] 顯示在被中斷的檔案上（「暫停中：…」）。
+     * @return 是否真的有下載被暫停（正在下載，或有連著的記錄器上的檔案在排隊；呼叫端用來提示使用者）
      */
     @Synchronized
-    fun hold(): Boolean {
+    override fun hold(reason: String): Boolean {
         holds.update { it + 1 }
-        current?.let { (id, job) ->
+        holdReason = reason
+        val running = current
+        running?.let { (id, job) ->
             pausingId = id
             job.cancel()
         }
-        return _tasks.value.any { it.isActive }
+        return running != null || nextRunnable() != null
     }
 
-    fun release() {
+    /** 等 [hold] 中斷的那個檔案真的停下來（連線已切斷），之後記錄器的連線才空得出來。 */
+    override suspend fun awaitPaused() {
+        current?.second?.join()
+    }
+
+    override fun release() {
         holds.update { (it - 1).coerceAtLeast(0) }
         startWorker()
     }
@@ -190,7 +205,7 @@ class DownloadRepository(
                     runQueue()
                     // 與 startWorker 同步檢查：收尾期間新加入的檔案由同一個 worker 接著處理
                     val more = synchronized(this@DownloadRepository) {
-                        val queued = holds.value == 0 && nextRunnable() != null
+                        val queued = nextRunnable() != null
                         if (!queued) {
                             worker = null
                             _active.value = false
@@ -198,6 +213,10 @@ class DownloadRepository(
                         queued
                     }
                     if (!more) break
+                    // 暫停中（串流播放、送指令）：worker 與前景服務留著等，恢復後接著下載。
+                    // 不結束再重開：指令造成的暫停很頻繁，而且 App 在背景時不一定能重新啟動前景服務
+                    // 等待中全部取消了也要結束（服務不能留著空等到恢復）
+                    combine(holds, _tasks) { h, _ -> h == 0 || nextRunnable() == null }.first { it }
                 }
             } finally {
                 val self = coroutineContext.job
@@ -251,7 +270,7 @@ class DownloadRepository(
         } catch (e: CancellationException) {
             if (pausingId == task.id) {
                 pausingId = null
-                updateTask(task.id) { it.copy(status = TaskStatus.Queued, speedBps = 0, message = "暫停中：正在播放記錄器上的影片") }
+                updateTask(task.id) { it.copy(status = TaskStatus.Queued, speedBps = 0, message = "暫停中：$holdReason") }
             } else {
                 updateTask(task.id) { it.copy(status = TaskStatus.Cancelled, message = "已取消（再次下載會從中斷處續傳）") }
             }
