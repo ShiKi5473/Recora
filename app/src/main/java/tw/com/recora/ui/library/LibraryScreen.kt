@@ -170,7 +170,8 @@ fun LibraryScreen(
         container.libraryChanged.tryEmit(Unit)
     }
     LaunchedEffect(Unit) {
-        if (!hasFullAccess) {
+        if (!hasFullAccess && !vm.askedPermission) {
+            vm.askedPermission = true
             permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES))
         }
     }

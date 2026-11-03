@@ -22,12 +22,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import tw.com.recora.data.AppSettings
 import tw.com.recora.data.DashcamConfig
+import tw.com.recora.data.DiagLog
 import tw.com.recora.data.ThemeMode
 import tw.com.recora.data.api.RtspProbe
 import tw.com.recora.data.enumOr
 import tw.com.recora.ui.AppRoot
 import tw.com.recora.ui.editor.CalibrationJob
 import tw.com.recora.ui.theme.RecoraTheme
+import java.io.IOException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,6 +55,27 @@ class MainActivity : ComponentActivity() {
             }
             RecoraTheme(dark = dark, dynamicColor = settings.dynamicColor) {
                 AppRoot(container)
+            }
+        }
+    }
+
+    /**
+     * 退到背景：畫面拿的停錄租約在 ON_STOP 已經歸還（ComponentActivity 先分派 ON_STOP 才執行這裡），
+     * Astro 不等 10 秒、馬上恢復錄影，之後 App 被滑掉關閉也不會停在回放模式。
+     * 佇列裡還有這台記錄器的檔案就不動：下載馬上又要停錄，恢復了只會多錄一小段。
+     */
+    override fun onStop() {
+        super.onStop()
+        if (isChangingConfigurations) return
+        val c = (application as RecoraApp).container
+        c.appScope.launch {
+            val brand = c.connection.boundBrand ?: return@launch
+            if (!c.connection.isConnected) return@launch
+            if (c.downloads.tasks.value.any { it.isActive && it.file.brand == brand }) return@launch
+            try {
+                c.api.onAppBackground()
+            } catch (e: IOException) {
+                DiagLog.log("退到背景時恢復錄影失敗：${e.message}")
             }
         }
     }

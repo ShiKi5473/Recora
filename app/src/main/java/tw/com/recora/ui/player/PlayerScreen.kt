@@ -169,7 +169,7 @@ fun PlayerScreen(
             playWhenReady = session.resumePlaying
         }
     }
-    var isPlaying by remember { mutableStateOf(true) }
+    var isPlaying by remember { mutableStateOf(session.resumePlaying) }
     var controlsVisible by remember { mutableStateOf(true) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var buffering by remember { mutableStateOf(false) }
@@ -329,7 +329,18 @@ fun PlayerScreen(
             }
         }
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) player.pause()
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                // 串流中：暫停時 ExoPlayer 仍會預讀、佔住記錄器的連線（Astro 切回錄影模式後也讀不到），
+                // stop 才會關掉；清單與位置都留著。不會觸發 onPlayerError，也不是播完（STATE_IDLE 不是 ENDED）
+                if (current.url.startsWith("http")) player.stop()
+            } else if (event == Lifecycle.Event.ON_START && player.playbackState == Player.STATE_IDLE &&
+                !current.url.startsWith("http")
+            ) {
+                // 回到 App：重新載入、維持暫停（註冊時立刻收到的 ON_START 播放器還不是 IDLE，不會走到這裡）
+                error = null
+                player.prepare()
+            }
         }
         player.addListener(listener)
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -387,6 +398,8 @@ fun PlayerScreen(
             return
         }
         queue = rest
+        // 畫面重建（從剪輯頁回來）時清單由 playQueue 重建，刪掉的那一段也要拿掉
+        container.playQueue = rest
         playAt(removed.coerceAtMost(rest.lastIndex))
     }
 
@@ -490,7 +503,12 @@ fun PlayerScreen(
                     }
                     // 只有手機上的檔案可以剪輯（串流中的記錄器檔案要先下載）
                     if (isLocal(current)) {
-                        IconButton(onClick = { onEdit(current.url, current.title) }) {
+                        IconButton(
+                            onClick = {
+                                // 位置與播放狀態會在離開時記進 PlayerSession，從剪輯頁回來時停在同一段的同一個時間點
+                                onEdit(current.url, current.title)
+                            },
+                        ) {
                             Icon(Icons.Filled.ContentCut, contentDescription = "剪輯", tint = Color.White)
                         }
                     }

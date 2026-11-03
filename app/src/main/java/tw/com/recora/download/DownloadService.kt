@@ -14,6 +14,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -32,15 +33,22 @@ class DownloadService : Service() {
     private var observing = false
     private var finishedAtStart: Set<String> = emptySet()
 
+    /** 更新進度通知的協程：收尾時先停掉，移除前景通知之後才不會又被 notify 回來、留下常駐通知。 */
+    private var progressJob: Job? = null
+
+    /** 最近一次 [onStartCommand] 的 startId：收尾時用來確認之後沒有新的啟動要求。 */
+    private var lastStartId = 0
+
     private val repo get() = (application as RecoraApp).container.downloads
     private val nm get() = getSystemService(NotificationManager::class.java)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         if (intent?.action == ACTION_CANCEL) {
             repo.cancelAll()
-            if (!observing) stopSelf()
+            if (!observing) stopSelfResult(startId)
             return START_NOT_STICKY
         }
         createChannels()
@@ -50,24 +58,24 @@ class DownloadService : Service() {
         if (!observing) {
             observing = true
             finishedAtStart = repo.tasks.value.filter { !it.isActive }.map { it.id }.toSet()
-            scope.launch {
+            progressJob = scope.launch {
                 repo.tasks.collect { tasks ->
                     nm.notify(PROGRESS_ID, buildProgress(tasks))
                     delay(500)
                 }
             }
-            scope.launch {
-                repo.active.first { !it }
-                finish()
-            }
+            awaitFinish()
         }
         return START_NOT_STICKY
     }
 
-    /** Android 15+ 的 dataSync 時間上限到了：取消佇列並停止（已下載的部分保留，再次下載會從中斷處續傳）。 */
+    /**
+     * Android 15+ 的 dataSync 時間上限到了：取消佇列並馬上停止（系統只給幾秒，不等佇列真的結束）。
+     * 已下載的部分保留，再次下載會從中斷處續傳。
+     */
     override fun onTimeout(startId: Int, fgsType: Int) {
         repo.cancelAll()
-        finish()
+        stop(force = true)
     }
 
     override fun onDestroy() {
@@ -75,10 +83,37 @@ class DownloadService : Service() {
         super.onDestroy()
     }
 
+    /** 等佇列結束（[DownloadRepository.active] 變 false）後收尾。 */
+    private fun awaitFinish() {
+        scope.launch {
+            repo.active.first { !it }
+            finish()
+        }
+    }
+
     private fun finish() {
+        if (!observing) return // onTimeout 已經停止
+        // 收尾前又開始下載（例如佇列剛結束又加入檔案）：繼續當前景服務，等這批也結束
+        if (repo.active.value) {
+            awaitFinish()
+            return
+        }
+        stop(force = false)
+    }
+
+    /**
+     * 移除進度通知、顯示摘要並停止服務。一般用 stopSelfResult：收尾時剛好有新的啟動要求（還沒輪到 onStartCommand），
+     * 服務被停掉的話系統會判定 startForegroundService() 之後沒有呼叫 startForeground() 而讓 App 閃退；
+     * 這時服務不停，那次的 onStartCommand 因為 [observing] = false 會重新開始觀察（摘要從那時起重新算）。
+     * [force] = true（[onTimeout]）一律停止。
+     */
+    private fun stop(force: Boolean) {
+        progressJob?.cancel()
+        progressJob = null
+        observing = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         postSummary()
-        stopSelf()
+        if (force) stopSelf() else stopSelfResult(lastStartId)
     }
 
     private fun buildProgress(tasks: List<DownloadTask>): Notification {

@@ -173,15 +173,18 @@ class DashcamConnection(
         if (boundNetwork != null || requestCallback != null) log("中斷連線")
         _state.value = ConnState.Idle
         disconnectJob = scope.launch {
+            var warning: String? = null
             if (wasConnected && brand != null) {
                 try {
                     withTimeout(apiFor(brand).disconnectTimeoutMs) { apiFor(brand).onDisconnecting() }
                 } catch (e: Exception) {
-                    log("通知記錄器失敗：${e.message}") // 記錄器已經離線也沒關係
+                    log("通知記錄器失敗：${e.message}")
+                    warning = apiFor(brand).disconnectFailureWarning
                 }
             }
             releaseRequest()
             unbind()
+            if (warning != null && _state.value == ConnState.Idle) _state.value = ConnState.Failed(warning)
         }
     }
 

@@ -25,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.LifecycleStartEffect
 import coil.compose.AsyncImage
 import tw.com.recora.AppContainer
 import tw.com.recora.data.PlayItem
@@ -58,11 +58,12 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
     val toast: (String) -> Unit = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     var items by remember { mutableStateOf(photos) }
     val pager = rememberPagerState(initialPage = startIndex.coerceIn(photos.indices)) { items.size }
-    // 看記錄器上的照片時維持檔案模式（Astro 要停錄；MUFU 沒有動作）
+    // 看記錄器上的照片時維持檔案模式（Astro 要停錄；MUFU 沒有動作）。
+    // 退到背景（ON_STOP）就歸還，Astro 馬上恢復錄影（MainActivity.onStop）；回到 App 再重新停錄
     val fromDashcam = photos.any { it.sdPath != null }
-    DisposableEffect(fromDashcam) {
+    LifecycleStartEffect(fromDashcam) {
         val lease = if (fromDashcam) container.api.holdFiles("看照片") else Lease.NONE
-        onDispose { lease.close() }
+        onStopOrDispose { lease.close() }
     }
     var pendingDelete by remember { mutableStateOf<PlayItem?>(null) }
     val deleteItem = rememberMediaDeleter(container, toast) { item, deleted ->
