@@ -1,5 +1,7 @@
 package tw.com.recora.ui.player
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.net.Uri
 import android.view.LayoutInflater
 import android.view.View
@@ -42,8 +44,10 @@ import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -60,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -77,6 +82,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -100,6 +106,10 @@ import tw.com.recora.data.FileNames
 import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.PlayItem
 import tw.com.recora.data.PlayOrder
+import tw.com.recora.data.gps.GpsPoint
+import tw.com.recora.data.gps.GpsTrack
+import tw.com.recora.data.gps.Gpx
+import tw.com.recora.data.gps.LocalGps
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.FullscreenEffect
 import tw.com.recora.ui.common.LightSystemBarIcons
@@ -115,6 +125,8 @@ import tw.com.recora.ui.common.rememberDashcamGrant
 import tw.com.recora.ui.common.rememberMediaDeleter
 import tw.com.recora.ui.common.shareMedia
 import tw.com.recora.ui.common.zoomGestures
+import java.io.File
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -375,6 +387,60 @@ fun PlayerScreen(
     val startedAt = remember(current.title) { LocalLibrary.recordingStart(current.title) }
     val recordedAt = startedAt?.plusNanos(positionMs * 1_000_000)
 
+    // 影片裡的 GPS（Astro 的原始檔才有）：換段時從手機上的檔案讀一次；串流中的記錄器檔案不讀
+    val gps by produceState<GpsTrack?>(null, current.url) {
+        val item = current
+        value = null
+        value = if (isLocal(item)) LocalGps.read(context, item.url) else null
+    }
+    val hasGpsFix = remember(gps) { gps?.points?.any { it?.fix == true } == true }
+
+    /** 播放位置那一秒的 GPS。片長比筆數多一點點（例如 60.05 秒、60 筆；播完會停在片長）時，最後那一點點算最後一筆。 */
+    fun gpsAt(ms: Long): GpsPoint? {
+        val track = gps ?: return null
+        return track.pointAt(ms) ?: track.points.lastOrNull().takeIf { ms / 1000 == track.points.size.toLong() }
+    }
+    val gpsText = if (settings.showGps && gps != null) gpsLabel(gpsAt(positionMs)) else null
+
+    /** 用地圖 App 開啟目前這一秒的位置（外部 App 不受本 App 綁在記錄器網路上的影響）。 */
+    fun openMap() {
+        val p = gpsAt(player.currentPosition)?.takeIf { it.fix }
+        if (p == null) {
+            toast("這個時間點沒有定位")
+            return
+        }
+        val at = String.format(Locale.US, "%.6f,%.6f", p.latitude, p.longitude)
+        // Uri.encode 不編碼括號，但括號是 q=…(標籤) 的分隔
+        val label = Uri.encode(recordedAt?.let(Formats::dateTime) ?: current.title).replace("(", "%28").replace(")", "%29")
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$at?q=$at($label)")))
+        } catch (e: ActivityNotFoundException) {
+            toast("找不到可以開啟地圖的 App")
+        }
+    }
+
+    /**
+     * 整段的 GPS 軌跡寫成 GPX 分享出去（暫存在快取的 gpx/）。
+     * 只清掉 1 小時前的舊檔：雲端硬碟等會在背景晚一點才讀，剛分享的不能馬上刪。
+     */
+    fun shareGpx() {
+        val track = gps ?: return
+        val name = current.title.substringBeforeLast('.')
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                runCatching {
+                    val text = Gpx.write(name, track) ?: return@runCatching null
+                    val dir = File(context.cacheDir, "gpx").apply { mkdirs() }
+                    val expired = System.currentTimeMillis() - GPX_KEEP_MS
+                    dir.listFiles()?.filter { it.lastModified() < expired }?.forEach { it.delete() }
+                    val file = File(dir, "$name.gpx").apply { writeText(text) }
+                    FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                }.getOrNull()
+            }
+            if (uri == null) toast("無法產生 GPS 軌跡") else shareMedia(context, listOf(uri), "application/gpx+xml")
+        }
+    }
+
     // 全螢幕：轉橫向並隱藏狀態列 / 導覽列；離開畫面時還原
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
@@ -466,6 +532,15 @@ fun PlayerScreen(
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
+                    gpsText?.let {
+                        Text(
+                            it,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 8.dp).background(Scrim.light, MaterialTheme.shapes.extraSmall)
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
                     Spacer(Modifier.weight(1f))
                     // 全螢幕時右上角也保留截圖
                     IconButton(onClick = screenshot, modifier = Modifier.background(Scrim.light, CircleShape)) {
@@ -488,6 +563,8 @@ fun PlayerScreen(
                         recordedAt?.let {
                             Text("錄影時間 ${Formats.dateTime(it)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
                         }
+                        // 窄螢幕放不下時跟「錄影時間」一樣換行，不截掉座標
+                        gpsText?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall) }
                         if (queue.size > 1) {
                             Text(
                                 "${index + 1} / ${queue.size}　滑動切換・雙指放大",
@@ -516,9 +593,12 @@ fun PlayerScreen(
                         canShare = isLocal(current),
                         canDownload = !isLocal(current) && current.sdPath != null,
                         canDelete = isDeletable(current),
+                        hasGps = hasGpsFix,
                         onShare = { shareMedia(context, listOf(Uri.parse(current.url)), "video/*") },
                         onDownload = ::downloadCurrent,
                         onDelete = { pendingDelete = current },
+                        onOpenMap = ::openMap,
+                        onShareGpx = ::shareGpx,
                     )
                 }
             }
@@ -621,19 +701,29 @@ private const val CONTROLS_HIDE_MS = 3_000L
 /** 拖曳進度時 seek 的最短間隔。 */
 private const val SCRUB_SEEK_INTERVAL_MS = 200L
 
+/** 分享用的 GPX 暫存檔保留多久。 */
+private const val GPX_KEEP_MS = 60 * 60 * 1000L
+
 private fun mediaItem(item: PlayItem): MediaItem = MediaItem.Builder().setUri(item.url).setMediaId(item.url).build()
 
-/** 標題列右邊的「更多」：分享（手機上的檔案）、加入下載（記錄器上的檔案）、刪除。 */
+/** 標題下的 GPS：時速與座標；那一秒沒有定位時說明。 */
+private fun gpsLabel(p: GpsPoint?): String =
+    if (p == null || !p.fix) "GPS 未定位" else String.format(Locale.US, "%.0f km/h  %.5f, %.5f", p.speedKmh, p.latitude, p.longitude)
+
+/** 標題列右邊的「更多」：分享（手機上的檔案）、加入下載（記錄器上的檔案）、GPS（開地圖、分享軌跡）、刪除。 */
 @Composable
 private fun MoreMenu(
     canShare: Boolean,
     canDownload: Boolean,
     canDelete: Boolean,
+    hasGps: Boolean,
     onShare: () -> Unit,
     onDownload: () -> Unit,
     onDelete: () -> Unit,
+    onOpenMap: () -> Unit,
+    onShareGpx: () -> Unit,
 ) {
-    if (!canShare && !canDownload && !canDelete) return
+    if (!canShare && !canDownload && !canDelete && !hasGps) return
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) {
@@ -652,6 +742,18 @@ private fun MoreMenu(
                     text = { Text("加入下載") },
                     leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
                     onClick = { open = false; onDownload() },
+                )
+            }
+            if (hasGps) {
+                DropdownMenuItem(
+                    text = { Text("在地圖開啟目前位置") },
+                    leadingIcon = { Icon(Icons.Filled.Map, contentDescription = null) },
+                    onClick = { open = false; onOpenMap() },
+                )
+                DropdownMenuItem(
+                    text = { Text("分享 GPS 軌跡（GPX）") },
+                    leadingIcon = { Icon(Icons.Filled.Timeline, contentDescription = null) },
+                    onClick = { open = false; onShareGpx() },
                 )
             }
             if (canDelete) {

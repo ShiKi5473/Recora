@@ -141,6 +141,11 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     subtitle = "例如只存車牌附近；關閉時一律存整張畫面",
                     checked = settings.screenshotVisibleArea,
                 ) { v -> update { it.copy(screenshotVisibleArea = v) } }
+                SwitchRow(
+                    title = "顯示 GPS",
+                    subtitle = "Astro 的原始檔：標題下顯示時速與座標（關掉後「更多」選單仍可開地圖、分享軌跡）",
+                    checked = settings.showGps,
+                ) { v -> update { it.copy(showGps = v) } }
             }
 
             Section("剪輯匯出", Icons.Filled.ContentCut) { ExportSettingsFields(settings, update) }

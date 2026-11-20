@@ -68,6 +68,8 @@ data class AppSettings(
     val autoPlayNext: Boolean = false,
     /** 放大時截圖只存畫面上看得到的範圍（關閉時存整張）。 */
     val screenshotVisibleArea: Boolean = false,
+    /** 播放 Astro 的原始檔時，標題下顯示影片裡的 GPS（時速、座標）。 */
+    val showGps: Boolean = true,
     val exportCodec: ExportCodec = ExportCodec.H264,
     val exportResolution: ExportResolution = ExportResolution.Original,
     val exportQuality: ExportQuality = ExportQuality.Standard,
@@ -118,6 +120,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val libraryFolders = stringSetPreferencesKey("library_folders")
         val autoPlayNext = booleanPreferencesKey("auto_play_next")
         val screenshotVisibleArea = booleanPreferencesKey("screenshot_visible_area")
+        val showGps = booleanPreferencesKey("show_gps")
         val exportCodec = stringPreferencesKey("export_codec")
         val exportResolution = stringPreferencesKey("export_resolution")
         val exportQuality = stringPreferencesKey("export_quality")
@@ -163,6 +166,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
             libraryFolders = p[Keys.libraryFolders]?.let { LocalLibrary.extraFolders(it, albumDir) } ?: d.libraryFolders,
             autoPlayNext = p[Keys.autoPlayNext] ?: d.autoPlayNext,
             screenshotVisibleArea = p[Keys.screenshotVisibleArea] ?: d.screenshotVisibleArea,
+            showGps = p[Keys.showGps] ?: d.showGps,
             exportCodec = enumOr(p[Keys.exportCodec], d.exportCodec),
             exportResolution = enumOr(p[Keys.exportResolution], d.exportResolution),
             exportQuality = enumOr(p[Keys.exportQuality], d.exportQuality),
@@ -190,6 +194,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         p[Keys.libraryFolders] = s.libraryFolders
         p[Keys.autoPlayNext] = s.autoPlayNext
         p[Keys.screenshotVisibleArea] = s.screenshotVisibleArea
+        p[Keys.showGps] = s.showGps
         p[Keys.exportCodec] = s.exportCodec.name
         p[Keys.exportResolution] = s.exportResolution.name
         p[Keys.exportQuality] = s.exportQuality.name
