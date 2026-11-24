@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -281,15 +282,17 @@ class MufuApi(
         }
         // 實測單項讀取（Camera.Menu.X）不可靠，改讀完整清單；改解析度時記錄器約 1 分鐘沒有回應
         var last: String? = null
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            delay(2000)
-            last = try {
-                getProperties("Camera.Menu.*")["Camera.Menu.$key"]
-            } catch (e: IOException) {
-                null
+        // 期限用協程的計時：不受手機時間被校正影響（到期時正在讀的那一次一起取消）
+        withTimeoutOrNull(timeoutMs) {
+            while (true) {
+                delay(2000)
+                last = try {
+                    getProperties("Camera.Menu.*")["Camera.Menu.$key"]
+                } catch (e: IOException) {
+                    null
+                }
+                if (last.equals(value, ignoreCase = true)) break
             }
-            if (last.equals(value, ignoreCase = true)) break
         }
         return last
     }
@@ -358,17 +361,19 @@ class MufuApi(
         delay(2000)
         var last: String? = null
         var sawBusy = false
-        val deadline = System.currentTimeMillis() + FORMAT_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            last = try {
-                cardStatus()
-            } catch (e: IOException) {
-                null // 格式化期間記錄器可能暫時不回應
+        withTimeoutOrNull(FORMAT_TIMEOUT_MS) {
+            while (true) {
+                val status = try {
+                    cardStatus()
+                } catch (e: IOException) {
+                    null // 格式化期間記錄器可能暫時不回應
+                }
+                last = status
+                onProgress(status ?: "等待記錄器回應…")
+                if (status != null && !status.equals("READY", ignoreCase = true)) sawBusy = true
+                if (status.equals("READY", ignoreCase = true) && (sawBusy || isCardEmpty())) break
+                delay(1000)
             }
-            onProgress(last ?: "等待記錄器回應…")
-            if (last != null && !last.equals("READY", ignoreCase = true)) sawBusy = true
-            if (last.equals("READY", ignoreCase = true) && (sawBusy || isCardEmpty())) break
-            delay(1000)
         }
         return if (last.equals("READY", ignoreCase = true)) {
             "格式化完成，記憶卡已清空"

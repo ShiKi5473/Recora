@@ -14,8 +14,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import tw.com.recora.data.Brand
 import tw.com.recora.data.DiagLog
@@ -74,7 +72,11 @@ class DashcamConnection(
     /** 每次連上後呼叫（對時、自動備份緊急錄影、接著下載沒下載完的檔案），傳入連上的記錄器。 */
     var onConnected: (suspend (DashcamApi) -> Unit)? = null
 
-    private val lock = Mutex()
+    /**
+     * 保護 [boundNetwork]／[boundBrand] 的綁定與解除：綁定在協程裡、網路中斷在 ConnectivityManager 的執行緒，
+     * 兩邊都要「檢查再改」一起做完。裡面不暫停，所以用 synchronized。
+     */
+    private val bindLock = Any()
 
     @Volatile
     private var boundNetwork: Network? = null
@@ -197,8 +199,10 @@ class DashcamConnection(
         val result = api.probe(null)
         log("測試模式探測 ${brand.label} ${api.host}：${result.detail}")
         if (result.ok) {
-            boundBrand = brand
-            _state.value = ConnState.Connected(viaOverride = true, brand = brand)
+            synchronized(bindLock) {
+                boundBrand = brand
+                _state.value = ConnState.Connected(viaOverride = true, brand = brand)
+            }
             scope.launch { onConnected?.invoke(api) }
         } else {
             _state.value = ConnState.Failed("連不到 ${api.host}：${result.detail}")
@@ -254,7 +258,7 @@ class DashcamConnection(
         if (!ok && !userSelected) return false
         if (!ok) log("仍然綁定此網路，之後的請求會顯示錯誤原因")
 
-        val bound = lock.withLock {
+        val bound = synchronized(bindLock) {
             if (boundNetwork == network) return true
             if (boundNetwork != null) return false
             if (!cm.bindProcessToNetwork(network)) {
@@ -295,20 +299,28 @@ class DashcamConnection(
         cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
             ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
 
+    /** ConnectivityManager 的執行緒呼叫。 */
     private fun handleLost(network: Network) {
-        if (network != boundNetwork) return
+        if (!unbind(only = network)) return
         log("記錄器網路中斷")
-        unbind()
         _state.value = ConnState.Failed("與記錄器的連線中斷")
     }
 
-    private fun unbind() {
-        if (boundNetwork != null) {
-            cm.bindProcessToNetwork(null)
-            boundNetwork = null
+    /**
+     * 解除綁定、結束這次連線（[DashcamApi.onDisconnected]）。[only] 不是 null 時只在目前綁的就是它才解除。
+     * @return 是否真的解除了
+     */
+    private fun unbind(only: Network? = null): Boolean {
+        val brand = synchronized(bindLock) {
+            if (only != null && only != boundNetwork) return false
+            if (boundNetwork != null) {
+                cm.bindProcessToNetwork(null)
+                boundNetwork = null
+            }
+            boundBrand.also { boundBrand = null }
         }
-        boundBrand?.let { apiFor(it).onDisconnected() }
-        boundBrand = null
+        brand?.let { apiFor(it).onDisconnected() }
+        return true
     }
 
     private fun releaseRequest() {

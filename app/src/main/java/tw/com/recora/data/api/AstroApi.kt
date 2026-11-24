@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -403,26 +404,31 @@ class AstroApi(
             }
             DiagLog.log("格式化記憶卡：${reply?.let { "Status ${it.status}" } ?: "記錄器沒有回應"}")
             if (reply != null && !reply.ok) return@withRecordingStopped "記錄器拒絕格式化（Status ${reply.status}）"
-            val deadline = System.currentTimeMillis() + formatTimeoutMs
-            while (System.currentTimeMillis() < deadline) {
-                delay(2000)
-                val card = try {
-                    cardStatus()
-                } catch (e: IOException) {
-                    null // 格式化期間記錄器可能暫時不回應
-                }
-                onProgress(card ?: "等待記錄器回應…")
-                if (card == "正常") {
-                    val left = try {
-                        listAll().values.sumOf { it.size }
+            // 期限用協程的計時：不受手機時間被校正影響
+            val emptied = withTimeoutOrNull(formatTimeoutMs) {
+                while (true) {
+                    delay(2000)
+                    val card = try {
+                        cardStatus()
                     } catch (e: IOException) {
-                        -1
+                        null // 格式化期間記錄器可能暫時不回應
                     }
-                    if (left == 0) return@withRecordingStopped "格式化完成，記憶卡已清空"
-                    if (left > 0) onProgress("記憶卡上還有 $left 個檔案…")
+                    onProgress(card ?: "等待記錄器回應…")
+                    if (card == "正常") {
+                        val left = try {
+                            listAll().values.sumOf { it.size }
+                        } catch (e: IOException) {
+                            -1
+                        }
+                        if (left == 0) break
+                        if (left > 0) onProgress("記憶卡上還有 $left 個檔案…")
+                    }
                 }
-            }
-            if (reply == null) {
+                true
+            } == true
+            if (emptied) {
+                "格式化完成，記憶卡已清空"
+            } else if (reply == null) {
                 "記錄器沒有回應格式化，記憶卡也沒有清空。請再試一次；仍然不行就取出記憶卡，用電腦格式化"
             } else {
                 "已送出格式化，但還沒確認完成，請稍後重新整理檔案列表確認"
