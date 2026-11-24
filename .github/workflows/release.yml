@@ -1,0 +1,130 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag（例如 v1.0.1；留空則只編譯上傳 Workflow Artifact，不建立 Release）'
+        required: false
+        default: ''
+      prerelease:
+        description: '標記為 Pre-release'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure gradlew is executable
+        run: chmod +x gradlew
+
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Missing GitHub Secret KEYSTORE_BASE64. Please add it in Repository Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > app/mufu-debug.keystore
+          PASS="${KEYSTORE_PASSWORD:-android}"
+          keytool -list -keystore app/mufu-debug.keystore -storepass "$PASS" > /dev/null
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="$INPUT_TAG"
+          fi
+
+          if [ -n "$TAG" ]; then
+            VERSION_NAME="${TAG#v}"
+            if [[ "$VERSION_NAME" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))? ]]; then
+              MAJOR="${BASH_REMATCH[1]}"
+              MINOR="${BASH_REMATCH[2]}"
+              PATCH="${BASH_REMATCH[4]:-0}"
+              VERSION_CODE=$(( 10#$MAJOR * 10000 + 10#$MINOR * 100 + 10#$PATCH ))
+            else
+              VERSION_CODE="${{ github.run_number }}"
+            fi
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+            echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+            echo "apk_name=Recora-${TAG}.apk" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version_name=" >> "$GITHUB_OUTPUT"
+            echo "version_code=" >> "$GITHUB_OUTPUT"
+            echo "apk_name=Recora-build-${{ github.run_number }}.apk" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run unit tests and build release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          GRADLE_ARGS=(testDebugUnitTest assembleRelease)
+          if [ -n "${{ steps.version.outputs.version_code }}" ]; then
+            GRADLE_ARGS+=(-PversionCode="${{ steps.version.outputs.version_code }}")
+            GRADLE_ARGS+=(-PversionName="${{ steps.version.outputs.version_name }}")
+          fi
+          ./gradlew "${GRADLE_ARGS[@]}"
+
+      - name: Package APK and checksum
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/release/app-release.apk "release-assets/${{ steps.version.outputs.apk_name }}"
+          (cd release-assets && sha256sum "${{ steps.version.outputs.apk_name }}" > "${{ steps.version.outputs.apk_name }}.sha256")
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n1)
+          "$APKSIGNER" verify --print-certs "release-assets/${{ steps.version.outputs.apk_name }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.apk_name }}
+          path: release-assets/*
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Recora ${{ steps.version.outputs.tag }}
+          prerelease: ${{ inputs.prerelease || contains(steps.version.outputs.tag, '-') }}
+          generate_release_notes: true
+          files: release-assets/*
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f app/mufu-debug.keystore
+

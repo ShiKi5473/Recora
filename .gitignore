@@ -16,3 +16,7 @@ replay_pid*.log
 
 # 校正腳本的截圖與結果
 tools/calibration/out/
+
+# 本專案專用簽章檔（不進版控，CI 由 GitHub Secret 還原）
+*.keystore
+*.jks

@@ -88,8 +88,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 也可以直接用 Android Studio 開啟專案。APK 也能複製到手機上點開安裝（需允許「安裝不明應用程式」）。
 
-release 版也是用 debug 金鑰（`%USERPROFILE%\.android\debug.keystore`）簽署。換電腦或金鑰重建後，
-新版會無法覆蓋安裝，所以請備份這個檔案。
+debug 與 release 版統一使用專案專用的 `app/mufu-debug.keystore` 簽署（不與系統全域 `~/.android/debug.keystore` 共用，也不進 Git 版控），
+確保本機開發直裝與 GitHub Release 的 APK 可在手機上直接覆蓋升級。
+
+### GitHub 自動 Release
+
+推送 `v*` 標籤（例如 `git tag v1.0.1 && git push origin v1.0.1`）或在 GitHub Actions 手動觸發 **Release APK** workflow，
+會自動執行單元測試、編譯 `release` APK 並發佈到 GitHub Releases。需先在 GitHub Repository **Settings > Secrets and variables > Actions**
+設定 `KEYSTORE_BASE64`（`app/mufu-debug.keystore` 的 Base64 編碼內容）。
 
 ## 從舊版（tw.com.mufudashcam「MUFU 記錄器」或 tw.com.dashcam「行車記錄器」）升級
 

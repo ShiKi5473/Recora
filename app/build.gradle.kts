@@ -1,3 +1,4 @@
+import java.io.File
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -10,18 +11,41 @@ android {
     namespace = "tw.com.recora"
     compileSdk = 36
 
+    fun configValue(name: String): String? =
+        providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }
+            ?: providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() }
+
+    val resolvedKeystoreFile = configValue("KEYSTORE_PATH")
+        ?.let { path ->
+            val f = File(path)
+            if (f.isAbsolute) f else rootProject.file(path)
+        }
+        ?: file("mufu-debug.keystore")
+
     defaultConfig {
         applicationId = "tw.com.recora"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = configValue("versionCode")?.toInt() ?: 1
+        versionName = configValue("versionName") ?: "1.0"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = resolvedKeystoreFile
+            storePassword = configValue("KEYSTORE_PASSWORD") ?: "android"
+            keyAlias = configValue("KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = configValue("KEY_PASSWORD") ?: "android"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
-            // 自用側載：release 也用 debug 金鑰簽署，免另外管理 keystore
+            // 本專案專用簽章：debug 與 release 統一使用 app/mufu-debug.keystore，可互通覆蓋升級
             signingConfig = signingConfigs.getByName("debug")
         }
     }
