@@ -42,9 +42,16 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
+            // 手機（arm64）與模擬器（x86_64）；MapLibre 每種 ABI 約 10 MB 原生庫，其他兩種用不到
+            ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         }
         release {
-            isMinifyEnabled = false
+            // R8：去掉沒用到的程式（material-icons-extended、Media3、MapLibre 佔大部分）與資源
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // 自用側載到 arm64 手機，release 只打包 arm64-v8a 的原生庫
+            ndk { abiFilters += "arm64-v8a" }
             // 本專案專用簽章：debug 與 release 統一使用 app/mufu-debug.keystore，可互通覆蓋升級
             signingConfig = signingConfigs.getByName("debug")
         }
