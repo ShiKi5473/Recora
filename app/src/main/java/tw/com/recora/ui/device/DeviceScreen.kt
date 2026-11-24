@@ -250,7 +250,7 @@ fun DeviceScreen(container: AppContainer, onOpenSettings: () -> Unit) {
                 ListItem(
                     leadingContent = { Icon(Icons.Filled.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     headlineContent = { Text("App 設定", style = MaterialTheme.typography.titleMedium) },
-                    supportingContent = { Text("下載、剪輯匯出、外觀、記錄器 Wi-Fi 密碼") },
+                    supportingContent = { Text("下載、剪輯匯出、外觀、記錄器 Wi-Fi 密碼、App 更新") },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 )

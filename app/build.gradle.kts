@@ -16,12 +16,14 @@ android {
         providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }
             ?: providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() }
 
-    val resolvedKeystoreFile = configValue("KEYSTORE_PATH")
+    val explicitKeystorePath = configValue("KEYSTORE_PATH")
+    val resolvedKeystoreFile = explicitKeystorePath
         ?.let { path ->
             val f = File(path)
             if (f.isAbsolute) f else rootProject.file(path)
         }
         ?: file("mufu-debug.keystore")
+    val githubRepo = configValue("recora.githubRepo") ?: "ShiKi5473/Recora"
 
     defaultConfig {
         applicationId = "tw.com.recora"
@@ -29,14 +31,18 @@ android {
         targetSdk = 36
         versionCode = configValue("versionCode")?.toInt() ?: 1
         versionName = configValue("versionName") ?: "1.0"
+        buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")
     }
 
     signingConfigs {
         getByName("debug") {
-            storeFile = resolvedKeystoreFile
-            storePassword = configValue("KEYSTORE_PASSWORD") ?: "android"
-            keyAlias = configValue("KEY_ALIAS") ?: "androiddebugkey"
-            keyPassword = configValue("KEY_PASSWORD") ?: "android"
+            // CI（push / PR）沒有專案專用 keystore 時退回 AGP 預設 debug keystore，避免 assembleDebug 失敗
+            if (explicitKeystorePath != null || resolvedKeystoreFile.exists()) {
+                storeFile = resolvedKeystoreFile
+                storePassword = configValue("KEYSTORE_PASSWORD") ?: "android"
+                keyAlias = configValue("KEY_ALIAS") ?: "androiddebugkey"
+                keyPassword = configValue("KEY_PASSWORD") ?: "android"
+            }
         }
     }
 
@@ -98,6 +104,8 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)

@@ -11,6 +11,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -36,6 +38,8 @@ import tw.com.recora.ui.common.MediaThumbFetcher
 import tw.com.recora.ui.editor.CalibrationJob
 import tw.com.recora.ui.editor.ClipExporter
 import tw.com.recora.ui.player.PlayQueues
+import tw.com.recora.update.AppUpdateScheduler
+import tw.com.recora.update.AppUpdater
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -53,8 +57,32 @@ class RecoraApp : Application(), ImageLoaderFactory {
         )
         container = AppContainer(this)
         container.connection.start()
-        // 上次匯出到一半 App 被關掉時留下的暫存檔
-        container.appScope.launch(Dispatchers.IO) { ClipExporter.cleanStale(this@RecoraApp) }
+        // 上次匯出到一半 App 被關掉時留下的暫存檔，以及舊版更新 APK 快取
+        container.appScope.launch(Dispatchers.IO) {
+            ClipExporter.cleanStale(this@RecoraApp)
+            AppUpdater.cleanupStaleFiles(this@RecoraApp)
+            val s = container.settings.current()
+            AppUpdateScheduler.syncSchedule(this@RecoraApp, s.appAutoUpdate, s.appUpdateWifiOnly)
+            AppUpdateScheduler.checkOnStartupIfDue(this@RecoraApp, s)
+        }
+        // 自動更新設定變更時重新排程 WorkManager
+        container.appScope.launch(Dispatchers.IO) {
+            container.settings.flow
+                .distinctUntilChangedBy { it.appAutoUpdate to it.appUpdateWifiOnly }
+                .drop(1)
+                .collect {
+                    AppUpdateScheduler.syncSchedule(this@RecoraApp, it.appAutoUpdate, it.appUpdateWifiOnly)
+                    if (it.appAutoUpdate) AppUpdateScheduler.checkOnStartupIfDue(this@RecoraApp, it)
+                }
+        }
+        // 記錄器檔案下載結束後，若有已驗證待安裝的 App 更新則自動接續安裝
+        container.appScope.launch(Dispatchers.IO) {
+            container.downloads.active
+                .drop(1)
+                .collect { active ->
+                    if (!active) AppUpdater.resumePendingInstallIfReady(this@RecoraApp)
+                }
+        }
     }
 
     /**

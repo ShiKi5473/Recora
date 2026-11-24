@@ -52,7 +52,7 @@ API 規格見 [MUFU_V60P_API.md](MUFU_V60P_API.md) 與 [ASTRO_LEO3_API.md](ASTRO
   - 同步時間。
   - 修改記錄器設定：改完會讀回確認；官方 App 沒有提供的項目放在「進階」。
   - 診斷紀錄（可複製）。
-- **App 設定**（「裝置」頁的「App 設定」）：下載、瀏覽、播放、剪輯匯出、外觀（主題、動態色彩）。
+- **App 設定**（「裝置」頁的「App 設定」）：下載、瀏覽、播放、剪輯匯出、外觀（主題、動態色彩）、App 更新（手動檢查或自動背景檢查 GitHub Releases 並下載安裝）。
   記錄器 Wi-Fi 的 SSID 開頭與密碼也在這裡（MUFU、Astro 各一組）：只改 App 自己存的值，不會改到記錄器本身的密碼。
 
 ## Astro LEO3
@@ -94,11 +94,13 @@ release 版有地方閃退（多半是 `ClassNotFoundException`／`NoSuchMethodE
 debug 與 release 版統一使用專案專用的 `app/mufu-debug.keystore` 簽署（不與系統全域 `~/.android/debug.keystore` 共用，也不進 Git 版控），
 確保本機開發直裝與 GitHub Release 的 APK 可在手機上直接覆蓋升級。
 
-### GitHub 自動 Release
+### GitHub 自動 CI 與 Release
 
-推送 `v*` 標籤（例如 `git tag v1.0.1 && git push origin v1.0.1`）或在 GitHub Actions 手動觸發 **Release APK** workflow，
-會自動執行單元測試、編譯 `release` APK 並發佈到 GitHub Releases。需先在 GitHub Repository **Settings > Secrets and variables > Actions**
-設定 `KEYSTORE_BASE64`（`app/mufu-debug.keystore` 的 Base64 編碼內容）。
+- **CI**（`.github/workflows/ci.yml`）：推送至 `main`、開啟 Pull Request 或手動觸發時，自動執行單元測試（`:app:testDebugUnitTest`）與 Debug 建置（`:app:assembleDebug`）。
+- **Release APK**（`.github/workflows/release.yml`）：推送 `v*` 標籤（例如 `git tag v1.0.1 && git push origin v1.0.1`）或在 GitHub Actions 手動觸發 **Release APK** workflow，
+  會自動執行單元測試、編譯並驗證簽章的 `release` APK 與 `.sha256` 校驗檔，並發佈到 GitHub Releases。需先在 GitHub Repository **Settings > Secrets and variables > Actions**
+  設定 `KEYSTORE_BASE64`（`app/mufu-debug.keystore` 的 Base64 編碼內容；亦相容 `ANDROID_KEYSTORE_BASE64` 等名稱）。
+- **App 內更新**：在「App 設定 → App 更新」可手動檢查 GitHub Releases 最新版本，或開啟每日自動檢查與下載更新（支援 SHA-256 與 APK 簽章驗證、透過 `PackageInstaller` 直接覆蓋安裝，並會在記錄器檔案下載進行中暫緩安裝）。
 
 ## 從舊版（tw.com.mufudashcam「MUFU 記錄器」或 tw.com.dashcam「行車記錄器」）升級
 

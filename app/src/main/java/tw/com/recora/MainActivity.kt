@@ -13,8 +13,10 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -29,6 +31,9 @@ import tw.com.recora.data.enumOr
 import tw.com.recora.ui.AppRoot
 import tw.com.recora.ui.editor.CalibrationJob
 import tw.com.recora.ui.theme.RecoraTheme
+import tw.com.recora.ui.update.launchInstallConfirmIntent
+import tw.com.recora.update.AppUpdateNotifier
+import tw.com.recora.update.AppUpdater
 import java.io.IOException
 
 class MainActivity : ComponentActivity() {
@@ -38,6 +43,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val container = (application as RecoraApp).container
         handleDebugIntent(intent)
+        if (intent?.action == AppUpdateNotifier.ACTION_OPEN_UPDATE) {
+            AppUpdater.showPromptIfUpdatePending(this)
+        }
+        // 畫面可見時，若 PackageInstaller 需要系統安裝確認視窗則立即開啟
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                AppUpdater.confirmEvents.collect { confirmIntent ->
+                    launchInstallConfirmIntent(this@MainActivity, confirmIntent)
+                }
+            }
+        }
         setContent {
             val settings by container.settings.state.collectAsStateWithLifecycle()
             val dark = when (settings.themeMode) {
@@ -59,6 +75,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        AppUpdater.setForeground(true)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (packageManager.canRequestPackageInstalls()) {
+            AppUpdater.resumePendingInstallIfReady(this)
+        }
+    }
+
     /**
      * 退到背景：畫面拿的停錄租約在 ON_STOP 已經歸還（ComponentActivity 先分派 ON_STOP 才執行這裡），
      * Astro 不等 10 秒、馬上恢復錄影，之後 App 被滑掉關閉也不會停在回放模式。
@@ -67,6 +95,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         if (isChangingConfigurations) return
+        AppUpdater.setForeground(false)
         val c = (application as RecoraApp).container
         c.appScope.launch {
             val brand = c.connection.boundBrand ?: return@launch
@@ -84,6 +113,9 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleDebugIntent(intent)
+        if (intent.action == AppUpdateNotifier.ACTION_OPEN_UPDATE) {
+            AppUpdater.showPromptIfUpdatePending(this)
+        }
     }
 
     /**

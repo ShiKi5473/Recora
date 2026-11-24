@@ -1,7 +1,9 @@
 package tw.com.recora.ui
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -9,6 +11,8 @@ object Formats {
     private val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd（E）", Locale.TAIWAN)
     private val DATE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+    private val EPOCH_MINUTE: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm").withZone(ZoneId.systemDefault())
 
     fun size(bytes: Long): String = when {
         bytes < 0 -> "?"
@@ -28,6 +32,8 @@ object Formats {
     fun date(d: LocalDate?): String = d?.format(DATE) ?: "日期不明"
 
     fun dateTime(t: LocalDateTime): String = t.format(DATE_TIME)
+
+    fun epochMinute(ms: Long): String = if (ms <= 0L) "尚未檢查" else EPOCH_MINUTE.format(Instant.ofEpochMilli(ms))
 
     /** 預估剩餘時間：不到 1 分鐘、約 5 分鐘、約 1 小時 5 分。 */
     fun eta(seconds: Long): String {

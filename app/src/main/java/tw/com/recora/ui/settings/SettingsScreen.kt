@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -16,13 +17,17 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -36,12 +41,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 import tw.com.recora.AppContainer
+import tw.com.recora.BuildConfig
 import tw.com.recora.data.AppSettings
 import tw.com.recora.data.DashcamConfig
 import tw.com.recora.data.ExportCodec
@@ -51,6 +58,7 @@ import tw.com.recora.data.Folder
 import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.SubfolderMode
 import tw.com.recora.data.ThemeMode
+import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.ChoiceRow
 import tw.com.recora.ui.common.Section
 import tw.com.recora.ui.common.SettingRow
@@ -58,6 +66,11 @@ import tw.com.recora.ui.common.SwitchRow
 import tw.com.recora.ui.editor.ClipExporter
 import tw.com.recora.ui.library.LibraryFoldersDialog
 import tw.com.recora.ui.library.libraryFoldersSummary
+import tw.com.recora.ui.update.launchInstallConfirmIntent
+import tw.com.recora.ui.update.openInstallPermissionSettings
+import tw.com.recora.update.AppUpdateState
+import tw.com.recora.update.AppUpdater
+import tw.com.recora.update.InstallPauseReason
 
 /** 修改 App 設定：傳入一個轉換函式。 */
 typealias SettingsUpdate = ((AppSettings) -> AppSettings) -> Unit
@@ -186,6 +199,137 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     password = settings.astroWifiPassword,
                     onSave = { prefix, pwd -> update { it.copy(astroSsidPrefix = prefix, astroWifiPassword = pwd) } },
                 )
+            }
+
+            Section("App 更新", Icons.Filled.SystemUpdate) {
+                AppUpdateSection(container, settings, update)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppUpdateSection(container: AppContainer, settings: AppSettings, update: SettingsUpdate) {
+    val context = LocalContext.current
+    val appUpdate by AppUpdater.state.collectAsStateWithLifecycle()
+    val transferActive by container.downloads.active.collectAsStateWithLifecycle()
+    var hasInstallPermission by remember { mutableStateOf(context.packageManager.canRequestPackageInstalls()) }
+    LifecycleResumeEffect(Unit) {
+        hasInstallPermission = context.packageManager.canRequestPackageInstalls()
+        onPauseOrDispose { }
+    }
+
+    Text("目前版本：v${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
+    Text(
+        "上次檢查更新：${Formats.epochMinute(settings.lastAppUpdateCheckMs)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(onClick = { AppUpdater.checkManual(context) }, enabled = !appUpdate.isBusy) {
+            Text("檢查更新")
+        }
+        when (val st = appUpdate) {
+            is AppUpdateState.Checking, is AppUpdateState.Verifying, is AppUpdateState.Installing -> {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+            is AppUpdateState.Downloading -> {
+                OutlinedButton(onClick = { AppUpdater.cancelDownload(context) }) { Text("取消下載") }
+            }
+            is AppUpdateState.Available -> {
+                OutlinedButton(onClick = { AppUpdater.startDownloadAndInstall(context, st.release, showPrompt = true) }) {
+                    Text("下載 v${st.release.version}")
+                }
+            }
+            is AppUpdateState.ReadyToInstall -> {
+                if (!hasInstallPermission) {
+                    OutlinedButton(onClick = { openInstallPermissionSettings(context) }) { Text("授權安裝") }
+                } else {
+                    OutlinedButton(
+                        onClick = { AppUpdater.installDownloaded(context, st.release, st.apkFile, showPrompt = true) },
+                        enabled = !transferActive,
+                    ) { Text("立即安裝") }
+                }
+            }
+            is AppUpdateState.PendingUserAction -> {
+                OutlinedButton(onClick = { launchInstallConfirmIntent(context, st.confirmIntent) }) {
+                    Text("確認安裝")
+                }
+            }
+            AppUpdateState.Idle, is AppUpdateState.UpToDate, is AppUpdateState.Failed -> Unit
+        }
+    }
+    if (appUpdate is AppUpdateState.Downloading) {
+        val dl = appUpdate as AppUpdateState.Downloading
+        val total = dl.totalBytes
+        val downloaded = dl.downloadedBytes
+        if (total > 0L) {
+            val fraction = (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+            val pct = ((downloaded * 100L) / total).coerceIn(0L, 100L)
+            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+            Text(
+                "正在下載 v${dl.release.version}：$pct%（${Formats.progress(downloaded, total)}）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Text(
+                "正在下載 v${dl.release.version}：已下載 ${Formats.size(downloaded)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    val statusText = when (val st = appUpdate) {
+        AppUpdateState.Idle -> null
+        AppUpdateState.Checking -> "正在檢查 GitHub 最新版本…"
+        is AppUpdateState.UpToDate -> "目前已是最新版本（v${st.currentVersion}）"
+        is AppUpdateState.Available -> "發現新版本 v${st.release.version}"
+        is AppUpdateState.Downloading -> null
+        is AppUpdateState.Verifying -> "正在驗證更新檔與簽章…"
+        is AppUpdateState.ReadyToInstall -> when {
+            transferActive || st.reason == InstallPauseReason.TRANSFER_ACTIVE ->
+                "v${st.release.version} 已下載完成，請等待記錄器檔案下載結束再安裝"
+            !hasInstallPermission || st.reason == InstallPauseReason.PERMISSION_REQUIRED ->
+                "v${st.release.version} 已下載完成，請允許「安裝未知應用程式」權限"
+            else -> "v${st.release.version} 已下載完成，可立即安裝"
+        }
+        is AppUpdateState.Installing -> "正在啟動安裝程序…"
+        is AppUpdateState.PendingUserAction -> "請在系統安裝確認視窗中完成更新"
+        is AppUpdateState.Failed -> "更新失敗：${st.message}"
+    }
+    statusText?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (appUpdate is AppUpdateState.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    SwitchRow(
+        title = "自動更新 App",
+        subtitle = "定期檢查 GitHub 新版本並自動下載安裝",
+        checked = settings.appAutoUpdate,
+    ) { v -> update { it.copy(appAutoUpdate = v) } }
+    if (settings.appAutoUpdate) {
+        SwitchRow(
+            title = "僅在 Wi-Fi 下自動下載更新",
+            subtitle = "避免使用行動數據下載安裝檔",
+            checked = settings.appUpdateWifiOnly,
+        ) { v -> update { it.copy(appUpdateWifiOnly = v) } }
+        if (!hasInstallPermission) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "尚未開啟「安裝未知應用程式」權限，自動下載後仍需手動授權才能完成更新。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { openInstallPermissionSettings(context) }) { Text("授權") }
             }
         }
     }

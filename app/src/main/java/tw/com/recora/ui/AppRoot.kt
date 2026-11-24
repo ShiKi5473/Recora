@@ -37,11 +37,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -64,6 +67,10 @@ import tw.com.recora.ui.library.LibraryScreen
 import tw.com.recora.ui.live.LiveScreen
 import tw.com.recora.ui.player.PlayerScreen
 import tw.com.recora.ui.settings.SettingsScreen
+import tw.com.recora.ui.update.AppUpdateDialog
+import tw.com.recora.ui.update.launchInstallConfirmIntent
+import tw.com.recora.ui.update.openInstallPermissionSettings
+import tw.com.recora.update.AppUpdater
 
 private data class TabItem(val route: Any, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
@@ -81,6 +88,16 @@ typealias OnPlay = (url: String, title: String, queue: List<PlayItem>) -> Unit
 @Composable
 fun AppRoot(container: AppContainer) {
     RequestRuntimePermissions()
+
+    val context = LocalContext.current
+    val settings by container.settings.state.collectAsStateWithLifecycle()
+    val appUpdate by AppUpdater.state.collectAsStateWithLifecycle()
+    val transferActive by container.downloads.active.collectAsStateWithLifecycle()
+    var hasInstallPermission by remember { mutableStateOf(context.packageManager.canRequestPackageInstalls()) }
+    LifecycleResumeEffect(Unit) {
+        hasInstallPermission = context.packageManager.canRequestPackageInstalls()
+        onPauseOrDispose { }
+    }
 
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
@@ -198,6 +215,24 @@ fun AppRoot(container: AppContainer) {
             }
         }
     }
+
+    AppUpdateDialog(
+        state = appUpdate,
+        transferActive = transferActive,
+        autoUpdateEnabled = settings.appAutoUpdate,
+        hasInstallPermission = hasInstallPermission,
+        onDownload = { rel -> AppUpdater.startDownloadAndInstall(context, rel, showPrompt = true) },
+        onInstall = { rel, apk -> AppUpdater.installDownloaded(context, rel, apk, showPrompt = true) },
+        onCancelDownload = { AppUpdater.cancelDownload(context) },
+        onOpenInstallSettings = { openInstallPermissionSettings(context) },
+        onRelaunchConfirm = { confirmIntent -> launchInstallConfirmIntent(context, confirmIntent) },
+        onEnableAutoUpdate = { enabled -> container.settings.launchUpdate { it.copy(appAutoUpdate = enabled) } },
+        onSkipVersion = { ver ->
+            container.settings.launchUpdate { it.copy(skippedAppVersion = ver) }
+            AppUpdater.dismissPrompt()
+        },
+        onDismiss = AppUpdater::dismissPrompt,
+    )
 }
 
 

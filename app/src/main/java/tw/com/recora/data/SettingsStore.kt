@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -88,6 +89,14 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.System,
     /** Android 12 以上依桌布配色。 */
     val dynamicColor: Boolean = false,
+    /** 自動檢查 GitHub Releases 並下載安裝 App 更新。 */
+    val appAutoUpdate: Boolean = false,
+    /** 自動更新時僅在 Wi-Fi（非計量網路）下檢查與下載。 */
+    val appUpdateWifiOnly: Boolean = true,
+    /** 上次成功檢查 GitHub Release 的時間戳記（ms）；0 代表尚未檢查。 */
+    val lastAppUpdateCheckMs: Long = 0L,
+    /** 使用者選擇略過自動提示的版本（例如 "1.0.1"）；空字串代表無。 */
+    val skippedAppVersion: String = "",
 ) {
     val overrideActive: Boolean get() = BuildConfig.DEBUG && hostOverride.isNotBlank()
 
@@ -140,6 +149,10 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
 
         val themeMode = stringPreferencesKey("theme_mode")
         val dynamicColor = booleanPreferencesKey("dynamic_color_v2")
+        val appAutoUpdate = booleanPreferencesKey("app_auto_update")
+        val appUpdateWifiOnly = booleanPreferencesKey("app_update_wifi_only")
+        val lastAppUpdateCheckMs = longPreferencesKey("last_app_update_check_ms")
+        val skippedAppVersion = stringPreferencesKey("skipped_app_version")
     }
 
     val flow: Flow<AppSettings> = store.data.map(::read)
@@ -184,6 +197,10 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
                 ?: p[Keys.legacyBitrateFactorsV1]?.let { v1 -> migrateFactorsV1(parseFactors(v1)) }.orEmpty(),
             themeMode = enumOr(p[Keys.themeMode], d.themeMode),
             dynamicColor = p[Keys.dynamicColor] ?: d.dynamicColor,
+            appAutoUpdate = p[Keys.appAutoUpdate] ?: d.appAutoUpdate,
+            appUpdateWifiOnly = p[Keys.appUpdateWifiOnly] ?: d.appUpdateWifiOnly,
+            lastAppUpdateCheckMs = p[Keys.lastAppUpdateCheckMs] ?: d.lastAppUpdateCheckMs,
+            skippedAppVersion = p[Keys.skippedAppVersion] ?: d.skippedAppVersion,
         )
     }
 
@@ -214,6 +231,10 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         p.remove(Keys.legacyBitrateFactorsV1)
         p[Keys.themeMode] = s.themeMode.name
         p[Keys.dynamicColor] = s.dynamicColor
+        p[Keys.appAutoUpdate] = s.appAutoUpdate
+        p[Keys.appUpdateWifiOnly] = s.appUpdateWifiOnly
+        p[Keys.lastAppUpdateCheckMs] = s.lastAppUpdateCheckMs
+        p[Keys.skippedAppVersion] = s.skippedAppVersion
     }
 }
 
