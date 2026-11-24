@@ -20,6 +20,9 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="33" />
 
+    <!-- WayMap 宣告 minSdk 31，但沒有用到 API 31 的功能（MapLibre 本身支援到 21），本 App 維持 minSdk 30 -->
+    <uses-sdk tools:overrideLibrary="com.waymap" />
+
     <application
         android:name=".RecoraApp"
         android:allowBackup="false"

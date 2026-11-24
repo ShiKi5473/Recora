@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -71,6 +72,8 @@ fun PlayerControls(
     switchCameraLabel: String?,
     showAutoPlay: Boolean,
     autoPlayNext: Boolean,
+    /** null = 這段沒有 GPS 路線（或全螢幕／橫向），不顯示「地圖」切換。 */
+    mapShown: Boolean?,
     fullscreen: Boolean,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -80,6 +83,7 @@ fun PlayerControls(
     onStepFrame: (forward: Boolean) -> Unit,
     onSwitchCamera: () -> Unit,
     onToggleAutoPlay: () -> Unit,
+    onToggleMap: () -> Unit,
     onToggleFullscreen: () -> Unit,
     onTopChanged: (Float) -> Unit,
     modifier: Modifier = Modifier,
@@ -109,6 +113,7 @@ fun PlayerControls(
             if (showAutoPlay) {
                 OverlayChip("自動播下一段", Icons.AutoMirrored.Filled.PlaylistPlay, selected = autoPlayNext, onClick = onToggleAutoPlay)
             }
+            if (mapShown != null) OverlayChip("地圖", Icons.Filled.Map, selected = mapShown, onClick = onToggleMap)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(Formats.duration(shown), color = Color.White, style = MaterialTheme.typography.labelMedium.tabular())

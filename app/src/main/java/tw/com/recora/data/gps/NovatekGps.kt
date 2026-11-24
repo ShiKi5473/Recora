@@ -1,5 +1,7 @@
 package tw.com.recora.data.gps
 
+import com.waymap.geo.GeoUtils
+import com.waymap.geo.LatLng
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
@@ -32,6 +34,19 @@ class GpsTrack(val points: List<GpsPoint?>) {
     /** 播放位置 [positionMs] 那一秒的記錄（可能未定位，看 [GpsPoint.fix]）；超出範圍回 null。 */
     fun pointAt(positionMs: Long): GpsPoint? =
         if (positionMs < 0) null else points.getOrNull((positionMs / 1000).toInt())
+
+    /** 已定位的點（第幾秒, 記錄），畫路線用。 */
+    val fixes: List<Pair<Int, GpsPoint>> by lazy {
+        points.mapIndexedNotNull { i, p -> if (p?.fix == true) i to p else null }
+    }
+
+    /** 離 ([latitude], [longitude]) 最近、而且在 [maxMeters] 以內的已定位點是第幾秒；沒有回 null。點地圖跳到那一秒用。 */
+    fun nearestSecond(latitude: Double, longitude: Double, maxMeters: Double): Int? {
+        val target = LatLng(latitude, longitude)
+        return fixes.map { (i, p) -> i to GeoUtils.haversine(target, LatLng(p.latitude, p.longitude)) }
+            .filter { it.second <= maxMeters }
+            .minByOrNull { it.second }?.first
+    }
 }
 
 /**

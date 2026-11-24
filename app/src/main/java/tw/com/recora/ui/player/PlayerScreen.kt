@@ -2,6 +2,7 @@ package tw.com.recora.ui.player
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.view.LayoutInflater
 import android.view.View
@@ -29,7 +30,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -76,6 +81,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -110,6 +116,7 @@ import tw.com.recora.data.gps.GpsPoint
 import tw.com.recora.data.gps.GpsTrack
 import tw.com.recora.data.gps.Gpx
 import tw.com.recora.data.gps.LocalGps
+import tw.com.recora.data.net.ConnState
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.FullscreenEffect
 import tw.com.recora.ui.common.LightSystemBarIcons
@@ -387,10 +394,10 @@ fun PlayerScreen(
     val startedAt = remember(current.title) { LocalLibrary.recordingStart(current.title) }
     val recordedAt = startedAt?.plusNanos(positionMs * 1_000_000)
 
-    // 影片裡的 GPS（Astro 的原始檔才有）：換段時從手機上的檔案讀一次；串流中的記錄器檔案不讀
+    // 影片裡的 GPS（Astro 的原始檔才有）：換段時從手機上的檔案讀一次；串流中的記錄器檔案不讀。
+    // 讀完才換掉（讀檔只要幾 ms）：先清成 null 的話，換段時路線地圖會被拆掉再重建
     val gps by produceState<GpsTrack?>(null, current.url) {
         val item = current
-        value = null
         value = if (isLocal(item)) LocalGps.read(context, item.url) else null
     }
     val hasGpsFix = remember(gps) { gps?.points?.any { it?.fix == true } == true }
@@ -486,208 +493,242 @@ fun PlayerScreen(
     }
     var pendingDelete by remember { mutableStateOf<PlayItem?>(null) }
 
+    // 路線地圖：直向、非全螢幕、這段有已定位的 GPS 時放在畫面下半部
+    val connState by container.connection.state.collectAsStateWithLifecycle()
+    val dashcamBound = (connState as? ConnState.Connected)?.viaOverride == false
+    val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+    val canShowMap = hasGpsFix && !fullscreen && portrait
+    val mapShown = canShowMap && settings.showRouteMap
+    // 地圖在下面時，影片區不留底部系統列的空間（改由地圖留）
+    val videoInsets = if (mapShown) WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal) else WindowInsets.safeDrawing
+
+    fun toggleMap() {
+        val on = !settings.showRouteMap
+        container.appScope.launch { container.settings.update { it.copy(showRouteMap = on) } }
+    }
+
     FullscreenEffect(fullscreen) { fullscreen = false }
     LightSystemBarIcons()
 
-    Box(Modifier.fillMaxSize().background(Color.Black).swipeToJump(enabled = { !zoom.isZoomed }, excluded = { p -> p.y > controlsTopPx }, onJump = ::jump)) {
-        Box(
-            (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().safeDrawingPadding())
-                // Initial：搶在其他手勢之前處理，捏合時不會順便切換控制列；控制列（進度條）上的拖曳不拿來平移
-                .zoomGestures(zoom, PointerEventPass.Initial) { pos, _ -> pos.y > controlsTopPx }
-                // 點一下影片顯示或收起控制列
-                .pointerInput(Unit) { detectTapGestures(onTap = { controlsVisible = !controlsVisible }) },
-        ) {
-            AndroidView(
-                factory = { ctx ->
-                    // TextureView 版的 PlayerView 才能縮放影像（見 player_view_texture.xml）
-                    (LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null) as PlayerView).apply {
-                        this.player = player
-                        // 控制列改由 Compose 畫（PlayerControls），這裡只負責影像
-                        useController = false
-                        playerView = this
-                    }
-                },
-                update = {
-                    // 只縮放影像本身，控制列維持原樣
-                    it.videoSurfaceView?.apply {
-                        scaleX = zoom.scale
-                        scaleY = zoom.scale
-                        translationX = zoom.offset.x
-                        translationY = zoom.offset.y
-                    }
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        Column(Modifier.fillMaxWidth().safeDrawingPadding()) {
-            AnimatedVisibility(visible = showControls, enter = fadeIn(), exit = fadeOut()) {
-            if (fullscreen) {
-                Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    recordedAt?.let {
-                        Text(
-                            Formats.dateTime(it),
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.background(Scrim.light, MaterialTheme.shapes.extraSmall)
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                    gpsText?.let {
-                        Text(
-                            it,
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(start = 8.dp).background(Scrim.light, MaterialTheme.shapes.extraSmall)
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                    Spacer(Modifier.weight(1f))
-                    // 全螢幕時右上角也保留截圖
-                    IconButton(onClick = screenshot, modifier = Modifier.background(Scrim.light, CircleShape)) {
-                        Icon(Icons.Filled.CameraAlt, contentDescription = "截圖", tint = Color.White)
-                    }
-                }
-            } else {
-                OverlayTopBar {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            current.title,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        recordedAt?.let {
-                            Text("錄影時間 ${Formats.dateTime(it)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+    Column(Modifier.fillMaxSize().background(Color.Black)) {
+        Box(Modifier.fillMaxWidth().weight(1f).swipeToJump(enabled = { !zoom.isZoomed }, excluded = { p -> p.y > controlsTopPx }, onJump = ::jump)) {
+            Box(
+                (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().windowInsetsPadding(videoInsets))
+                    // Initial：搶在其他手勢之前處理，捏合時不會順便切換控制列；控制列（進度條）上的拖曳不拿來平移
+                    .zoomGestures(zoom, PointerEventPass.Initial) { pos, _ -> pos.y > controlsTopPx }
+                    // 點一下影片顯示或收起控制列
+                    .pointerInput(Unit) { detectTapGestures(onTap = { controlsVisible = !controlsVisible }) },
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        // TextureView 版的 PlayerView 才能縮放影像（見 player_view_texture.xml）
+                        (LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null) as PlayerView).apply {
+                            this.player = player
+                            // 控制列改由 Compose 畫（PlayerControls），這裡只負責影像
+                            useController = false
+                            playerView = this
                         }
-                        // 窄螢幕放不下時跟「錄影時間」一樣換行，不截掉座標
-                        gpsText?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall) }
-                        if (queue.size > 1) {
+                    },
+                    update = {
+                        // 只縮放影像本身，控制列維持原樣
+                        it.videoSurfaceView?.apply {
+                            scaleX = zoom.scale
+                            scaleY = zoom.scale
+                            translationX = zoom.offset.x
+                            translationY = zoom.offset.y
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            Column(Modifier.fillMaxWidth().windowInsetsPadding(videoInsets)) {
+                AnimatedVisibility(visible = showControls, enter = fadeIn(), exit = fadeOut()) {
+                if (fullscreen) {
+                    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        recordedAt?.let {
                             Text(
-                                "${index + 1} / ${queue.size}　滑動切換・雙指放大",
-                                color = Color.White.copy(alpha = 0.7f),
+                                Formats.dateTime(it),
+                                color = Color.White,
                                 style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.background(Scrim.light, MaterialTheme.shapes.extraSmall)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                        gpsText?.let {
+                            Text(
+                                it,
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(start = 8.dp).background(Scrim.light, MaterialTheme.shapes.extraSmall)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        // 全螢幕時右上角也保留截圖
+                        IconButton(onClick = screenshot, modifier = Modifier.background(Scrim.light, CircleShape)) {
+                            Icon(Icons.Filled.CameraAlt, contentDescription = "截圖", tint = Color.White)
+                        }
+                    }
+                } else {
+                    OverlayTopBar {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = Color.White)
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                current.title,
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            recordedAt?.let {
+                                Text("錄影時間 ${Formats.dateTime(it)}", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                            }
+                            // 窄螢幕放不下時跟「錄影時間」一樣換行，不截掉座標
+                            gpsText?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall) }
+                            if (queue.size > 1) {
+                                Text(
+                                    "${index + 1} / ${queue.size}　滑動切換・雙指放大",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
-                    }
-                    IconButton(onClick = screenshot) {
-                        Icon(Icons.Filled.CameraAlt, contentDescription = "截圖", tint = Color.White)
-                    }
-                    // 只有手機上的檔案可以剪輯（串流中的記錄器檔案要先下載）
-                    if (isLocal(current)) {
-                        IconButton(
-                            onClick = {
-                                // 位置與播放狀態會在離開時記進 PlayerSession，從剪輯頁回來時停在同一段的同一個時間點
-                                onEdit(current.url, current.title)
-                            },
-                        ) {
-                            Icon(Icons.Filled.ContentCut, contentDescription = "剪輯", tint = Color.White)
+                        IconButton(onClick = screenshot) {
+                            Icon(Icons.Filled.CameraAlt, contentDescription = "截圖", tint = Color.White)
                         }
+                        // 只有手機上的檔案可以剪輯（串流中的記錄器檔案要先下載）
+                        if (isLocal(current)) {
+                            IconButton(
+                                onClick = {
+                                    // 位置與播放狀態會在離開時記進 PlayerSession，從剪輯頁回來時停在同一段的同一個時間點
+                                    onEdit(current.url, current.title)
+                                },
+                            ) {
+                                Icon(Icons.Filled.ContentCut, contentDescription = "剪輯", tint = Color.White)
+                            }
+                        }
+                        MoreMenu(
+                            canShare = isLocal(current),
+                            canDownload = !isLocal(current) && current.sdPath != null,
+                            canDelete = isDeletable(current),
+                            hasGps = hasGpsFix,
+                            onShare = { shareMedia(context, listOf(Uri.parse(current.url)), "video/*") },
+                            onDownload = ::downloadCurrent,
+                            onDelete = { pendingDelete = current },
+                            onOpenMap = ::openMap,
+                            onShareGpx = ::shareGpx,
+                        )
                     }
-                    MoreMenu(
-                        canShare = isLocal(current),
-                        canDownload = !isLocal(current) && current.sdPath != null,
-                        canDelete = isDeletable(current),
-                        hasGps = hasGpsFix,
-                        onShare = { shareMedia(context, listOf(Uri.parse(current.url)), "video/*") },
-                        onDownload = ::downloadCurrent,
-                        onDelete = { pendingDelete = current },
-                        onOpenMap = ::openMap,
-                        onShareGpx = ::shareGpx,
+                }
+                }
+                error?.let {
+                    Text(
+                        it,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp)
+                            .background(Scrim.strong, MaterialTheme.shapes.medium).padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }
             }
-            }
-            error?.let {
-                Text(
-                    it,
-                    color = Color.White,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp)
-                        .background(Scrim.strong, MaterialTheme.shapes.medium).padding(horizontal = 16.dp, vertical = 8.dp),
+            // 寫全名：外層有 Column（下半部的地圖），不然會被解析成 ColumnScope 版本而編譯失敗
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showControls,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                PlayerControls(
+                    isPlaying = isPlaying,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    hasPrevious = previousIndex != null,
+                    hasNext = nextIndex != null,
+                    switchCameraLabel = if (FileNames.counterpartName(current.title) != null) {
+                        if (FileNames.cameraOfName(current.title) != Camera.Rear) "切到後鏡頭" else "切到前鏡頭"
+                    } else {
+                        null
+                    },
+                    showAutoPlay = queue.size > 1,
+                    autoPlayNext = settings.autoPlayNext,
+                    mapShown = if (canShowMap) settings.showRouteMap else null,
+                    fullscreen = fullscreen,
+                    onPlayPause = {
+                        interactions++
+                        if (player.isPlaying) {
+                            player.pause()
+                        } else {
+                            if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+                            player.play()
+                        }
+                    },
+                    onPrevious = { interactions++; previousOrRestart() },
+                    onNext = { interactions++; jump(1) },
+                    onSeekPreview = { ms ->
+                        interactions++
+                        // 拖曳中只做節流的關鍵格 seek（串流的 TS 精準 seek 很慢），放開再精準 seek
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastScrubSeekAt >= SCRUB_SEEK_INTERVAL_MS) {
+                            lastScrubSeekAt = now
+                            player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                            player.seekTo(ms)
+                        }
+                    },
+                    onSeekFinished = { ms ->
+                        player.setSeekParameters(SeekParameters.EXACT)
+                        player.seekTo(ms)
+                        positionMs = ms
+                    },
+                    onStepFrame = { forward -> interactions++; stepFrame(forward) },
+                    onSwitchCamera = { interactions++; switchCamera() },
+                    onToggleAutoPlay = { interactions++; toggleAutoPlay() },
+                    onToggleMap = { interactions++; toggleMap() },
+                    onToggleFullscreen = { fullscreen = !fullscreen },
+                    onTopChanged = { controlsTopPx = it },
+                    modifier = Modifier.windowInsetsPadding(videoInsets),
                 )
             }
-        }
-        AnimatedVisibility(
-            visible = showControls,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter),
-        ) {
-            PlayerControls(
-                isPlaying = isPlaying,
-                positionMs = positionMs,
-                durationMs = durationMs,
-                hasPrevious = previousIndex != null,
-                hasNext = nextIndex != null,
-                switchCameraLabel = if (FileNames.counterpartName(current.title) != null) {
-                    if (FileNames.cameraOfName(current.title) != Camera.Rear) "切到後鏡頭" else "切到前鏡頭"
-                } else {
-                    null
-                },
-                showAutoPlay = queue.size > 1,
-                autoPlayNext = settings.autoPlayNext,
-                fullscreen = fullscreen,
-                onPlayPause = {
-                    interactions++
-                    if (player.isPlaying) {
-                        player.pause()
+            if (buffering) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            pendingDelete?.let { item ->
+                val local = isLocal(item)
+                ConfirmDeleteDialog(
+                    title = if (local) "從手機相簿刪除？" else "從記錄器刪除？",
+                    onDismiss = { pendingDelete = null },
+                    onConfirm = {
+                        pendingDelete = null
+                        // 記錄器的 HTTP 伺服器一次只服務一個連線：先停播放，del 的 CGI 才連得上。
+                        // 本機檔也先停，免得檔案在播放中被刪掉而跳出播放錯誤。
+                        player.stop()
+                        deleteItem(item)
+                    },
+                ) {
+                    val detail = if (local) {
+                        "會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。"
                     } else {
-                        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
-                        player.play()
+                        "會從記錄器刪除，無法復原（手機上已下載的檔案不受影響）。"
                     }
-                },
-                onPrevious = { interactions++; previousOrRestart() },
-                onNext = { interactions++; jump(1) },
-                onSeekPreview = { ms ->
+                    Text("${item.title}\n$detail")
+                }
+            }
+        }
+        val track = gps
+        if (mapShown && track != null) {
+            RouteMap(
+                track = track,
+                current = gpsAt(positionMs),
+                dashcamBound = dashcamBound,
+                onSeek = { ms ->
                     interactions++
-                    // 拖曳中只做節流的關鍵格 seek（串流的 TS 精準 seek 很慢），放開再精準 seek
-                    val now = SystemClock.uptimeMillis()
-                    if (now - lastScrubSeekAt >= SCRUB_SEEK_INTERVAL_MS) {
-                        lastScrubSeekAt = now
-                        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                        player.seekTo(ms)
-                    }
-                },
-                onSeekFinished = { ms ->
-                    player.setSeekParameters(SeekParameters.EXACT)
                     player.seekTo(ms)
                     positionMs = ms
                 },
-                onStepFrame = { forward -> interactions++; stepFrame(forward) },
-                onSwitchCamera = { interactions++; switchCamera() },
-                onToggleAutoPlay = { interactions++; toggleAutoPlay() },
-                onToggleFullscreen = { fullscreen = !fullscreen },
-                onTopChanged = { controlsTopPx = it },
-                modifier = Modifier.safeDrawingPadding(),
+                modifier = Modifier.fillMaxWidth().weight(0.8f)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)),
             )
-        }
-        if (buffering) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
-        pendingDelete?.let { item ->
-            val local = isLocal(item)
-            ConfirmDeleteDialog(
-                title = if (local) "從手機相簿刪除？" else "從記錄器刪除？",
-                onDismiss = { pendingDelete = null },
-                onConfirm = {
-                    pendingDelete = null
-                    // 記錄器的 HTTP 伺服器一次只服務一個連線：先停播放，del 的 CGI 才連得上。
-                    // 本機檔也先停，免得檔案在播放中被刪掉而跳出播放錯誤。
-                    player.stop()
-                    deleteItem(item)
-                },
-            ) {
-                val detail = if (local) {
-                    "會從手機相簿刪除，無法復原（記錄器上的原始檔不受影響）。"
-                } else {
-                    "會從記錄器刪除，無法復原（手機上已下載的檔案不受影響）。"
-                }
-                Text("${item.title}\n$detail")
-            }
         }
     }
 }

@@ -103,6 +103,9 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
 
+    implementation(libs.waymap)
+    implementation(libs.maplibre)
+
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)

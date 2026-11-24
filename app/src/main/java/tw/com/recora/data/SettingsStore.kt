@@ -70,6 +70,8 @@ data class AppSettings(
     val screenshotVisibleArea: Boolean = false,
     /** 播放 Astro 的原始檔時，標題下顯示影片裡的 GPS（時速、座標）。 */
     val showGps: Boolean = true,
+    /** 播放有 GPS 的影片時，直向畫面下半部顯示路線地圖。 */
+    val showRouteMap: Boolean = true,
     val exportCodec: ExportCodec = ExportCodec.H264,
     val exportResolution: ExportResolution = ExportResolution.Original,
     val exportQuality: ExportQuality = ExportQuality.Standard,
@@ -121,6 +123,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         val autoPlayNext = booleanPreferencesKey("auto_play_next")
         val screenshotVisibleArea = booleanPreferencesKey("screenshot_visible_area")
         val showGps = booleanPreferencesKey("show_gps")
+        val showRouteMap = booleanPreferencesKey("show_route_map")
         val exportCodec = stringPreferencesKey("export_codec")
         val exportResolution = stringPreferencesKey("export_resolution")
         val exportQuality = stringPreferencesKey("export_quality")
@@ -167,6 +170,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
             autoPlayNext = p[Keys.autoPlayNext] ?: d.autoPlayNext,
             screenshotVisibleArea = p[Keys.screenshotVisibleArea] ?: d.screenshotVisibleArea,
             showGps = p[Keys.showGps] ?: d.showGps,
+            showRouteMap = p[Keys.showRouteMap] ?: d.showRouteMap,
             exportCodec = enumOr(p[Keys.exportCodec], d.exportCodec),
             exportResolution = enumOr(p[Keys.exportResolution], d.exportResolution),
             exportQuality = enumOr(p[Keys.exportQuality], d.exportQuality),
@@ -195,6 +199,7 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
         p[Keys.autoPlayNext] = s.autoPlayNext
         p[Keys.screenshotVisibleArea] = s.screenshotVisibleArea
         p[Keys.showGps] = s.showGps
+        p[Keys.showRouteMap] = s.showRouteMap
         p[Keys.exportCodec] = s.exportCodec.name
         p[Keys.exportResolution] = s.exportResolution.name
         p[Keys.exportQuality] = s.exportQuality.name

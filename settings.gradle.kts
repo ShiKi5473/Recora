@@ -16,6 +16,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // WayMap（com.github.ShiKi5473.WayMap:*）由 JitPack 依 git tag 提供
+        maven("https://jitpack.io") {
+            content { includeGroupByRegex("com\\.github\\.ShiKi5473.*") }
+        }
     }
 }
 

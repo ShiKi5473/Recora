@@ -88,6 +88,18 @@ class NovatekGpsTest {
     }
 
     @Test
+    fun nearestSecondForMapTaps() {
+        val track = NovatekGps.read(source(mp4(listOf(real0, noFix, real1))))!!
+        assertEquals(listOf(0, 2), track.fixes.map { it.first })
+        // 第 0、2 秒相距約 18.6 m；點在第 2 秒北邊約 5 m
+        assertEquals(2, track.nearestSecond(24.16624, 120.618831, maxMeters = 40.0))
+        assertEquals(0, track.nearestSecond(24.166031901, 120.618798828, maxMeters = 1.0))
+        // 太遠：不算點到路線
+        assertNull(track.nearestSecond(24.17, 120.62, maxMeters = 40.0))
+        assertNull(NovatekGps.read(source(mp4(listOf(noFix))))!!.nearestSecond(0.0, 0.0, 1e9))
+    }
+
+    @Test
     fun findsMoovAfterMdat() {
         val track = NovatekGps.read(source(mp4(listOf(real0, real1), moovFirst = false)))!!
         assertEquals(2, track.points.size)

@@ -12,6 +12,9 @@ okhttp = "4.12.0"
 coroutines = "1.10.2"
 media3 = "1.11.1"
 coil = "2.7.0"
+waymap = "v0.2.0"
+# 與 WayMap v0.2.0 用的版本一致（只直接用到 HttpRequestUtil：連著記錄器時地圖改走行動網路）
+maplibre = "11.13.5"
 junit = "4.13.2"
 
 [libraries]
@@ -43,6 +46,10 @@ media3-transformer = { group = "androidx.media3", name = "media3-transformer", v
 
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 coil-video = { group = "io.coil-kt", name = "coil-video", version.ref = "coil" }
+
+# 自己的地圖函式庫（MapLibre + Compose），JitPack 依 git tag 建置：https://github.com/ShiKi5473/WayMap
+waymap = { group = "com.github.ShiKi5473.WayMap", name = "waymap", version.ref = "waymap" }
+maplibre = { group = "org.maplibre.gl", name = "android-sdk", version.ref = "maplibre" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }

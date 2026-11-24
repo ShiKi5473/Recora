@@ -146,6 +146,11 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     subtitle = "Astro 的原始檔：標題下顯示時速與座標（關掉後「更多」選單仍可開地圖、分享軌跡）",
                     checked = settings.showGps,
                 ) { v -> update { it.copy(showGps = v) } }
+                SwitchRow(
+                    title = "顯示路線地圖",
+                    subtitle = "Astro 的原始檔：直向時畫面下半部顯示路線，點路線跳到那一秒（播放畫面上也能切換）",
+                    checked = settings.showRouteMap,
+                ) { v -> update { it.copy(showRouteMap = v) } }
             }
 
             Section("剪輯匯出", Icons.Filled.ContentCut) { ExportSettingsFields(settings, update) }
