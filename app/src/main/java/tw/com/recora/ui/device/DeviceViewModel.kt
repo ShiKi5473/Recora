@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,10 +17,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tw.com.recora.AppContainer
 import kotlinx.coroutines.flow.lastOrNull
+import tw.com.recora.data.DashcamFiles
 import tw.com.recora.data.Folder
 import tw.com.recora.data.api.DashcamApi
 import tw.com.recora.data.SettingDef
+import tw.com.recora.data.SettingsStore
 import tw.com.recora.data.net.ConnState
+import tw.com.recora.data.net.DashcamConnection
+import tw.com.recora.download.DownloadRepository
 import java.io.IOException
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -48,7 +53,16 @@ data class DeviceUi(
     val working: Boolean = false,
 )
 
-class DeviceViewModel(private val c: AppContainer) : ViewModel() {
+class DeviceViewModel(
+    private val settings: SettingsStore,
+    private val connection: DashcamConnection,
+    /** 目前的記錄器：每次使用時才取（換品牌後才不會拿到舊的實作，見 AppContainer.api）。 */
+    private val api: () -> DashcamApi,
+    private val files: DashcamFiles,
+    private val downloads: DownloadRepository,
+    /** 格式化後通知「檔案」頁重新整理。 */
+    private val dashcamChanged: MutableSharedFlow<Unit>,
+) : ViewModel() {
     private val _ui = MutableStateFlow(DeviceUi())
     val ui: StateFlow<DeviceUi> = _ui.asStateFlow()
 
@@ -63,7 +77,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch {
-            c.connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
+            connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
                 if (connected) {
                     // 沒在看這一頁就先不讀，等 setVisible(true) 再補讀
                     if (visible && !loadedThisConnection) loadInfo()
@@ -81,7 +95,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
      */
     fun setVisible(value: Boolean) {
         visible = value
-        if (value && c.connection.isConnected && !loadedThisConnection) loadInfo()
+        if (value && connection.isConnected && !loadedThisConnection) loadInfo()
     }
 
     /** 讀取記錄器設定（可改的項目與選項依記錄器回報的為準）。 */
@@ -90,7 +104,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {
-                val snapshot = c.api.readSettings()
+                val snapshot = api().readSettings()
                 _ui.update {
                     it.copy(
                         defs = snapshot.defs, values = snapshot.values, readOnly = snapshot.readOnly,
@@ -118,22 +132,22 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(usageLoading = true) }
             val storage = try {
-                c.api.storageInfo()
+                api().storageInfo()
             } catch (e: IOException) {
                 null
             }
             _ui.update { it.copy(storage = storage) }
             val usage = LinkedHashMap<Folder, Pair<Int, Long>>()
             // Astro 讀列表要先停錄：自動讀取只用「檔案」頁已經讀過的，按「重新計算容量」才向記錄器讀
-            val cacheOnly = c.api.listingStopsRecording && !refresh
+            val cacheOnly = api().listingStopsRecording && !refresh
             for (folder in Folder.entries) {
                 try {
-                    val files = if (cacheOnly) {
-                        c.files.cached(folder) ?: continue
+                    val listed = if (cacheOnly) {
+                        files.cached(folder) ?: continue
                     } else {
-                        c.files.list(folder, refresh).lastOrNull().orEmpty()
+                        files.list(folder, refresh).lastOrNull().orEmpty()
                     }
-                    usage[folder] = files.size to files.sumOf { it.size.coerceAtLeast(0) }
+                    usage[folder] = listed.size to listed.sumOf { it.size.coerceAtLeast(0) }
                     _ui.update { it.copy(usage = LinkedHashMap(usage)) }
                 } catch (e: IOException) {
                     // 單一資料夾失敗不影響其他
@@ -152,7 +166,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
 
     private suspend fun readCardStatus(): String =
         try {
-            c.api.cardStatus() ?: "記錄器沒有回報"
+            api().cardStatus() ?: "記錄器沒有回報"
         } catch (e: IOException) {
             "讀取失敗：${e.message}"
         }
@@ -162,22 +176,22 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
      * 等待與確認完成的流程在各記錄器的實作裡，這裡只顯示進度。
      */
     fun formatCard() {
-        if (c.downloads.active.value) {
+        if (downloads.active.value) {
             _messages.trySend("下載進行中，請等下載結束再格式化")
             return
         }
         viewModelScope.launch {
             _ui.update { it.copy(formatting = true, cardStatus = "格式化中…") }
             val message = try {
-                c.api.formatCard { progress -> _ui.update { it.copy(cardStatus = progress) } }
+                api().formatCard { progress -> _ui.update { it.copy(cardStatus = progress) } }
             } catch (e: IOException) {
                 "格式化失敗：${e.message}"
             }
             _ui.update { it.copy(formatting = false) }
             _messages.trySend(message)
             // 不管成功與否，列表都可能已經變了
-            c.files.invalidateAll()
-            c.dashcamChanged.tryEmit(Unit)
+            files.invalidateAll()
+            dashcamChanged.tryEmit(Unit)
             val card = readCardStatus()
             _ui.update { it.copy(cardStatus = card) }
             refreshUsage()
@@ -193,7 +207,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
 
     private suspend fun readRecordStatus(): DashcamApi.RecordingStatus =
         try {
-            c.api.recordingStatus() ?: DashcamApi.RecordingStatus(recording = false, text = "記錄器沒有回報")
+            api().recordingStatus() ?: DashcamApi.RecordingStatus(recording = false, text = "記錄器沒有回報")
         } catch (e: IOException) {
             DashcamApi.RecordingStatus(recording = false, text = "讀取失敗：${e.message}")
         }
@@ -201,7 +215,7 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
     /** 修改記錄器設定，讀回確認是否真的套用。 */
     fun changeSetting(def: SettingDef, value: String) = command {
         if (def.slowMs > 0) _messages.trySend("${def.title}：記錄器套用中，約需 1 分鐘，期間不會回應…")
-        val actual = c.api.changeSetting(def, value)
+        val actual = api().changeSetting(def, value)
         if (actual != null) {
             _ui.update { it.copy(values = it.values + (def.key to actual)) }
         }
@@ -215,16 +229,16 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
 
     fun syncTime() = command {
         val now = ZonedDateTime.now(ZoneId.systemDefault()).withNano(0)
-        val result = c.api.syncTime(now)
+        val result = api().syncTime(now)
         val shown = now.toLocalDateTime().format(DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"))
         if (result.ok) "已把記錄器時間設為 $shown" else "記錄器回應：${result.body.take(120)}"
     }
 
     fun applyHostOverride(host: String) {
         viewModelScope.launch {
-            c.settings.update { it.copy(hostOverride = host.trim()) }
-            c.connection.disconnect()
-            if (host.isNotBlank()) c.connection.connect()
+            settings.update { it.copy(hostOverride = host.trim()) }
+            connection.disconnect()
+            if (host.isNotBlank()) connection.connect()
         }
     }
 
@@ -242,6 +256,13 @@ class DeviceViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     companion object {
-        fun factory(c: AppContainer) = viewModelFactory { initializer { DeviceViewModel(c) } }
+        fun factory(c: AppContainer) = viewModelFactory {
+            initializer {
+                DeviceViewModel(
+                    settings = c.settings, connection = c.connection, api = { c.api }, files = c.files,
+                    downloads = c.downloads, dashcamChanged = c.dashcamChanged,
+                )
+            }
+        }
     }
 }

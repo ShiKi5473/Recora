@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +28,8 @@ import tw.com.recora.data.Camera
 import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.LocalMedia
 import tw.com.recora.data.MediaKind
+import tw.com.recora.data.SettingsStore
+import tw.com.recora.download.DownloadRepository
 import tw.com.recora.download.MediaStoreSink
 import tw.com.recora.download.TaskStatus
 import tw.com.recora.ui.common.DateGroups
@@ -58,7 +61,13 @@ data class LibraryUi(
     fun of(kind: MediaKind): List<LocalMedia> = byKind[kind].orEmpty()
 }
 
-class LibraryViewModel(private val c: AppContainer) : ViewModel() {
+class LibraryViewModel(
+    private val settings: SettingsStore,
+    private val downloads: DownloadRepository,
+    private val sink: MediaStoreSink,
+    /** 相簿內容變了（匯出、刪除）：收到就重讀；這裡刪了也通知其他頁。 */
+    private val libraryChanged: MutableSharedFlow<Unit>,
+) : ViewModel() {
     private val _ui = MutableStateFlow(LibraryUi())
     val ui: StateFlow<LibraryUi> = _ui.asStateFlow()
 
@@ -78,13 +87,13 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     var askedPermission = false
 
     init {
-        viewModelScope.launch { c.libraryChanged.collect { refresh() } }
+        viewModelScope.launch { libraryChanged.collect { refresh() } }
         // 「相簿資料夾」改了
         viewModelScope.launch {
-            c.settings.state.map { it.libraryFolders }.distinctUntilChanged().drop(1).collect { refresh() }
+            settings.state.map { it.libraryFolders }.distinctUntilChanged().drop(1).collect { refresh() }
         }
         viewModelScope.launch {
-            c.downloads.tasks.map { tasks -> tasks.count { it.status == TaskStatus.Done } }
+            downloads.tasks.map { tasks -> tasks.count { it.status == TaskStatus.Done } }
                 .distinctUntilChanged()
                 .collect { refresh() }
         }
@@ -114,7 +123,7 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
             _ui.update { it.copy(loading = true) }
             try {
                 val items = withContext(Dispatchers.IO) {
-                    runCatching { LocalLibrary.sorted(c.sink.listLibrary()) }.getOrDefault(emptyList())
+                    runCatching { LocalLibrary.sorted(sink.listLibrary()) }.getOrDefault(emptyList())
                 }
                 // 已經不在相簿裡的檔案（例如被刪掉）從選取中移除
                 val present = items.mapTo(HashSet()) { it.uri }
@@ -128,9 +137,9 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     /** 讀取沒下載完的暫存檔（下載佇列裡還在等的是續傳的依據，不算）。 */
     fun loadLeftovers() {
         viewModelScope.launch {
-            val active = c.downloads.tasks.value.filter { it.isActive }.mapTo(HashSet()) { it.file.name.uppercase() }
+            val active = downloads.tasks.value.filter { it.isActive }.mapTo(HashSet()) { it.file.name.uppercase() }
             val pending = withContext(Dispatchers.IO) {
-                runCatching { c.sink.listPending() }.getOrDefault(emptyList())
+                runCatching { sink.listPending() }.getOrDefault(emptyList())
             }.filter { it.name.uppercase() !in active }
             _ui.update { it.copy(leftovers = pending) }
         }
@@ -139,7 +148,7 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     /** 清除沒下載完的暫存檔（之後再下載同一個檔案要從頭開始）。 */
     fun clearLeftovers(entries: List<MediaStoreSink.Entry>) {
         viewModelScope.launch {
-            val deleted = withContext(Dispatchers.IO) { entries.count { runCatching { c.sink.delete(it.uri) }.isSuccess } }
+            val deleted = withContext(Dispatchers.IO) { entries.count { runCatching { sink.delete(it.uri) }.isSuccess } }
             _messages.trySend("已清除 $deleted 個未完成的下載")
             loadLeftovers()
         }
@@ -152,18 +161,20 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     fun delete(items: List<LocalMedia>) {
         if (items.isEmpty()) return
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { c.sink.deleteOrRequest(items.map { Uri.parse(it.uri) }) }
+            val result = withContext(Dispatchers.IO) { sink.deleteOrRequest(items.map { Uri.parse(it.uri) }) }
             clearSelection()
             if (result.deleted > 0) {
                 _messages.trySend(if (items.size == 1) "已刪除 ${items[0].name}" else "已刪除 ${result.deleted} 個檔案")
                 // 相簿自己會收到並重新整理；「檔案」頁的已下載打勾也要跟著更新
-                c.libraryChanged.tryEmit(Unit)
+                libraryChanged.tryEmit(Unit)
             }
             result.confirm?.let { _deleteRequests.trySend(it) }
         }
     }
 
     companion object {
-        fun factory(c: AppContainer) = viewModelFactory { initializer { LibraryViewModel(c) } }
+        fun factory(c: AppContainer) = viewModelFactory {
+            initializer { LibraryViewModel(settings = c.settings, downloads = c.downloads, sink = c.sink, libraryChanged = c.libraryChanged) }
+        }
     }
 }

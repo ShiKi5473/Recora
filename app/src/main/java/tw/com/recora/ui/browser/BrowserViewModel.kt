@@ -22,10 +22,18 @@ import kotlinx.coroutines.withContext
 import tw.com.recora.AppContainer
 import tw.com.recora.data.Clip
 import tw.com.recora.data.Clips
+import tw.com.recora.data.DashcamDeleter
 import tw.com.recora.data.DashcamFile
+import tw.com.recora.data.DashcamFiles
 import tw.com.recora.data.DownloadChoice
 import tw.com.recora.data.Folder
+import tw.com.recora.data.SettingsStore
+import tw.com.recora.data.api.DashcamApi
 import tw.com.recora.data.net.ConnState
+import tw.com.recora.data.net.DashcamConnection
+import tw.com.recora.download.DownloadRepository
+import tw.com.recora.download.EventBackup
+import tw.com.recora.download.MediaStoreSink
 import tw.com.recora.download.TaskStatus
 import tw.com.recora.ui.common.DateGroups
 import java.io.IOException
@@ -55,7 +63,21 @@ data class BrowserUi(
         if (onlyMissing) clips.filter { Clips.isMissing(it, includeRear, downloaded) } else clips
 }
 
-class BrowserViewModel(private val c: AppContainer) : ViewModel() {
+class BrowserViewModel(
+    private val settings: SettingsStore,
+    private val connection: DashcamConnection,
+    /** 目前的記錄器：每次使用時才取（換品牌後才不會拿到舊的實作，見 AppContainer.api）。 */
+    private val api: () -> DashcamApi,
+    private val files: DashcamFiles,
+    private val downloads: DownloadRepository,
+    private val sink: MediaStoreSink,
+    private val eventBackup: EventBackup,
+    private val deleter: DashcamDeleter,
+    /** 手機上的檔案變了（相簿、播放器刪除）。 */
+    libraryChanged: Flow<Unit>,
+    /** 記錄器上的檔案變了（在播放器刪除、格式化記憶卡）。 */
+    dashcamChanged: Flow<Unit>,
+) : ViewModel() {
     private val _ui = MutableStateFlow(BrowserUi())
     val ui: StateFlow<BrowserUi> = _ui.asStateFlow()
 
@@ -72,9 +94,9 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
     init {
         viewModelScope.launch {
             // 開啟時顯示的資料夾（App 設定）；讀到設定後才開始讀列表
-            val start = c.settings.current().startFolder
+            val start = settings.current().startFolder
             if (!folderPicked) _ui.update { it.copy(folder = start) }
-            c.connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
+            connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
                 if (connected) {
                     if (mayLoadInBackground()) load()
                 } else {
@@ -84,16 +106,16 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
             }
         }
         viewModelScope.launch {
-            c.downloads.tasks
+            downloads.tasks
                 .map { tasks -> tasks.count { it.status == TaskStatus.Done } }
                 .distinctUntilChanged()
                 .collect { refreshDownloaded() }
         }
         // 手機上的檔案被刪掉（相簿、播放器）：打勾與「選取已下載的」要跟著更新
-        viewModelScope.launch { c.libraryChanged.collect { refreshDownloaded() } }
+        viewModelScope.launch { libraryChanged.collect { refreshDownloaded() } }
         // 在播放器刪掉記錄器上的檔案、或格式化記憶卡後，列表要跟著更新（快取已由對方更新）
         viewModelScope.launch {
-            c.dashcamChanged.collect { if (c.connection.isConnected && mayLoadInBackground()) load() }
+            dashcamChanged.collect { if (connection.isConnected && mayLoadInBackground()) load() }
         }
     }
 
@@ -104,19 +126,19 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
      * 沒在看這一頁時要不要讀列表：Astro 讀列表要先停錄，只有在看檔案時才讀（「檔案」頁拿著停錄的租約）；
      * MUFU 連線時本來就不錄影，連上就先讀進快取。
      */
-    private fun mayLoadInBackground(): Boolean = visible || !c.api.listingStopsRecording
+    private fun mayLoadInBackground(): Boolean = visible || !api().listingStopsRecording
 
     /** 「檔案」頁出現或離開；出現時（已連線、還沒有這個資料夾的列表）補讀。 */
     fun setVisible(value: Boolean) {
         visible = value
-        if (value && c.connection.isConnected && !_ui.value.loading) load()
+        if (value && connection.isConnected && !_ui.value.loading) load()
     }
 
     fun selectFolder(folder: Folder) {
         folderPicked = true
         if (folder == _ui.value.folder) return
         _ui.update { it.copy(folder = folder, clips = emptyList(), selection = emptySet(), error = null) }
-        if (c.connection.isConnected) load()
+        if (connection.isConnected) load()
     }
 
     /** 讀取目前的資料夾；[refresh] = 不用快取，重新向記錄器讀取。 */
@@ -126,7 +148,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         loadJob = viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {
-                c.files.list(folder, refresh).collect { files ->
+                files.list(folder, refresh).collect { files ->
                     _ui.update { it.copy(clips = Clips.group(files)) }
                 }
             } catch (e: CancellationException) {
@@ -180,7 +202,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(working = true) }
             val message = try {
-                val added = c.eventBackup.run()
+                val added = eventBackup.run()
                 if (added > 0) "已加入 $added 個緊急錄影檔案到下載佇列" else "緊急錄影都已經下載過了"
             } catch (e: CancellationException) {
                 throw e
@@ -197,7 +219,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
 
     fun download(clips: List<Clip>, choice: DownloadChoice) {
         val files = clips.flatMap { Clips.filesFor(it, choice) }
-        val added = c.downloads.enqueue(files)
+        val added = downloads.enqueue(files)
         clearSelection()
         _messages.trySend(
             when {
@@ -212,7 +234,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _ui.update { it.copy(working = true) }
             // 唯讀的緊急錄影不送、刪掉的從快取移除（規則在 DashcamDeleter）
-            val summary = c.deleter.deleteClips(clips, includeRear)
+            val summary = deleter.deleteClips(clips, includeRear)
             _ui.update { it.copy(working = false, selection = emptySet()) }
             _messages.trySend(summary.message)
             load()
@@ -224,13 +246,13 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         // 上一次還在解析時（例如連點兩下）忽略這次，免得解析兩次、開出兩個播放畫面
         if (playbackJob?.isActive == true) return
         playbackJob = viewModelScope.launch {
-            val local = withContext(Dispatchers.IO) { runCatching { c.sink.find(file.name, file.isImage) }.getOrNull() }
+            val local = withContext(Dispatchers.IO) { runCatching { sink.find(file.name, file.isImage) }.getOrNull() }
             if (local != null && !local.pending) {
                 onReady(local.uri.toString())
                 return@launch
             }
             try {
-                val url = c.api.resolveUrl(file.sdPath)
+                val url = api().resolveUrl(file.sdPath)
                 if (url == null) _messages.trySend("記錄器上找不到 ${file.name}") else onReady(url)
             } catch (e: IOException) {
                 _messages.trySend("連線失敗：${e.message}")
@@ -238,7 +260,7 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    fun thumbnailUrl(file: DashcamFile): String = c.api.httpUrl(file.sdPath)
+    fun thumbnailUrl(file: DashcamFile): String = api().httpUrl(file.sdPath)
 
     /** 重讀手機上已下載的檔案（打勾、「未下載」篩選、「選取已下載的」都靠它）；連續觸發時只留最後一次。 */
     fun refreshDownloaded() {
@@ -247,13 +269,21 @@ class BrowserViewModel(private val c: AppContainer) : ViewModel() {
     }
 
     private suspend fun loadDownloaded(): Map<String, Long> {
-        val entries = withContext(Dispatchers.IO) { runCatching { c.sink.downloadedEntries() }.getOrDefault(emptyMap()) }
+        val entries = withContext(Dispatchers.IO) { runCatching { sink.downloadedEntries() }.getOrDefault(emptyMap()) }
         val map = entries.mapValues { it.value.size }
         _ui.update { it.copy(downloaded = map, localUris = entries.mapValues { e -> e.value.uri.toString() }) }
         return map
     }
 
     companion object {
-        fun factory(c: AppContainer) = viewModelFactory { initializer { BrowserViewModel(c) } }
+        fun factory(c: AppContainer) = viewModelFactory {
+            initializer {
+                BrowserViewModel(
+                    settings = c.settings, connection = c.connection, api = { c.api }, files = c.files,
+                    downloads = c.downloads, sink = c.sink, eventBackup = c.eventBackup, deleter = c.deleter,
+                    libraryChanged = c.libraryChanged, dashcamChanged = c.dashcamChanged,
+                )
+            }
+        }
     }
 }
