@@ -147,6 +147,8 @@ fun PlayerScreen(
     container: AppContainer,
     url: String,
     title: String,
+    /** 來源頁面登記的播放清單（[PlayQueues]）；0 = 只播這一段。 */
+    queueId: Long,
     onBack: () -> Unit,
     onEdit: (String, String) -> Unit,
 ) {
@@ -157,8 +159,8 @@ fun PlayerScreen(
     var error by remember { mutableStateOf<String?>(null) }
     // 清單與目前位置跟著返回堆疊保存（見 PlayerSession）：去剪輯再回來仍停在剛才那一段
     val session = viewModel {
-        // 播放清單：來源頁面設定的清單（含目前這段），左右滑動切換；不在清單裡就只播這一段
-        val q = container.playQueue.takeIf { q -> q.any { it.url == url } } ?: listOf(PlayItem(url, title))
+        // 播放清單：來源頁面登記的清單（含目前這段），左右滑動切換；沒有（或不在清單裡）就只播這一段
+        val q = container.playQueues.take(queueId)?.takeIf { q -> q.any { it.url == url } } ?: listOf(PlayItem(url, title))
         PlayerSession(q, q.indexOfFirst { it.url == url }.coerceAtLeast(0))
     }
     var queue by session::queue
@@ -442,9 +444,8 @@ fun PlayerScreen(
             onBack()
             return
         }
+        // 清單在 PlayerSession 裡，去剪輯再回來也是改過的這份
         queue = rest
-        // 畫面重建（從剪輯頁回來）時清單由 playQueue 重建，刪掉的那一段也要拿掉
-        container.playQueue = rest
         playAt(next)
     }
 

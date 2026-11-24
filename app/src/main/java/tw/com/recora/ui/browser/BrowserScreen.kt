@@ -87,6 +87,7 @@ import tw.com.recora.data.DownloadChoice
 import tw.com.recora.data.Folder
 import tw.com.recora.data.api.Lease
 import tw.com.recora.data.net.ConnState
+import tw.com.recora.ui.OnPlay
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.ConnectionChip
 import tw.com.recora.ui.common.DateGroups
@@ -98,7 +99,7 @@ import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) -> Unit) {
+fun BrowserScreen(container: AppContainer, onPlay: OnPlay) {
     val vm: BrowserViewModel = viewModel(factory = BrowserViewModel.factory(container))
     val ui by vm.ui.collectAsStateWithLifecycle()
     val conn by container.connection.state.collectAsStateWithLifecycle()
@@ -136,11 +137,11 @@ fun BrowserScreen(container: AppContainer, onPlay: (url: String, title: String) 
         } else {
             vm.resolvePlayback(file) { url ->
                 // 左右滑動的清單：同資料夾、同鏡頭，順序同畫面；目前這段用剛解析出的網址（可能是已下載的本機檔）
-                container.playQueue = clips
+                val queue = clips
                     .mapNotNull { clip -> if (file.camera == Camera.Rear) clip.rear else clip.front }
                     .filter { !it.isImage }
                     .map { f -> PlayItem(if (f.sdPath == file.sdPath) url else vm.thumbnailUrl(f), f.name, f.sdPath) }
-                onPlay(url, file.name)
+                onPlay(url, file.name, queue)
             }
         }
     }

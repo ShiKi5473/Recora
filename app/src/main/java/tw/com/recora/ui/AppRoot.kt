@@ -2,7 +2,6 @@ package tw.com.recora.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -45,13 +44,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
+import androidx.navigation.toRoute
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import tw.com.recora.AppContainer
@@ -66,25 +65,18 @@ import tw.com.recora.ui.live.LiveScreen
 import tw.com.recora.ui.player.PlayerScreen
 import tw.com.recora.ui.settings.SettingsScreen
 
-private data class TabItem(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
+private data class TabItem(val route: Any, val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
 
 private val TABS = listOf(
-    TabItem("files", "檔案", Icons.Outlined.VideoLibrary, Icons.Filled.VideoLibrary),
-    TabItem("live", "即時", Icons.Outlined.Videocam, Icons.Filled.Videocam),
-    TabItem("downloads", "下載", Icons.Outlined.Download, Icons.Filled.Download),
-    TabItem("library", "相簿", Icons.Outlined.PhotoLibrary, Icons.Filled.PhotoLibrary),
-    TabItem("device", "裝置", Icons.Outlined.SdCard, Icons.Filled.SdCard),
+    TabItem(FilesRoute, "檔案", Icons.Outlined.VideoLibrary, Icons.Filled.VideoLibrary),
+    TabItem(LiveRoute, "即時", Icons.Outlined.Videocam, Icons.Filled.Videocam),
+    TabItem(DownloadsRoute, "下載", Icons.Outlined.Download, Icons.Filled.Download),
+    TabItem(LibraryRoute, "相簿", Icons.Outlined.PhotoLibrary, Icons.Filled.PhotoLibrary),
+    TabItem(DeviceRoute, "裝置", Icons.Outlined.SdCard, Icons.Filled.SdCard),
 )
 
-private const val PLAYER_ROUTE = "player?url={url}&title={title}"
-
-private fun playerRoute(url: String, title: String) =
-    "player?url=${Uri.encode(url)}&title=${Uri.encode(title)}"
-
-private const val EDITOR_ROUTE = "editor?uri={uri}&title={title}"
-
-private fun editorRoute(uri: String, title: String) =
-    "editor?uri=${Uri.encode(uri)}&title=${Uri.encode(title)}"
+/** 開播放畫面：[queue] = 左右滑動切換的清單（含這一段；空的就只播這一段）。 */
+typealias OnPlay = (url: String, title: String, queue: List<PlayItem>) -> Unit
 
 @Composable
 fun AppRoot(container: AppContainer) {
@@ -92,18 +84,21 @@ fun AppRoot(container: AppContainer) {
 
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route
+    val destination = backStack?.destination
     // 只取進行中的數量：下載進度每 300 ms 更新一次 tasks，整個 AppRoot（Scaffold、導覽列）不必跟著重組
     val activeCount by remember(container) {
         container.downloads.tasks.map { tasks -> tasks.count { it.isActive } }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = container.downloads.tasks.value.count { it.isActive })
-    val onPlay: (String, String) -> Unit = { url, title -> nav.navigate(playerRoute(url, title)) }
-    val onEdit: (String, String) -> Unit = { uri, title -> nav.navigate(editorRoute(uri, title)) }
+    // 清單交給 PlayQueues，導覽參數只帶編號
+    val onPlay: OnPlay = { url, title, queue ->
+        nav.navigate(PlayerRoute(url, title, if (queue.isEmpty()) 0L else container.playQueues.put(queue)))
+    }
+    val onEdit: (String, String) -> Unit = { uri, title -> nav.navigate(EditorRoute(uri, title)) }
     // debug：校正腳本指定的剪輯匯出；先關掉之前的剪輯畫面（釋放它的播放器），EditorScreen 自己接手這個工作
     LaunchedEffect(Unit) {
         container.calibrationJob.collect { job ->
             if (job != null) {
-                nav.navigate(editorRoute(job.uri, job.title)) { popUpTo(nav.graph.findStartDestination().id) }
+                nav.navigate(EditorRoute(job.uri, job.title)) { popUpTo(nav.graph.findStartDestination().id) }
             }
         }
     }
@@ -112,14 +107,15 @@ fun AppRoot(container: AppContainer) {
         contentWindowInsets = WindowInsets(0),
         bottomBar = {
             AnimatedVisibility(
-                visible = TABS.any { it.route == route } && !Immersive.active,
+                visible = TABS.any { destination?.hasRoute(it.route::class) == true } && !Immersive.active,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
             ) {
                 NavigationBar {
                     TABS.forEach { tab ->
+                        val selected = destination?.hasRoute(tab.route::class) == true
                         NavigationBarItem(
-                            selected = route == tab.route,
+                            selected = selected,
                             onClick = {
                                 nav.navigate(tab.route) {
                                     popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -128,8 +124,8 @@ fun AppRoot(container: AppContainer) {
                                 }
                             },
                             icon = {
-                                val icon = if (route == tab.route) tab.selectedIcon else tab.icon
-                                if (tab.route == "downloads" && activeCount > 0) {
+                                val icon = if (selected) tab.selectedIcon else tab.icon
+                                if (tab.route == DownloadsRoute && activeCount > 0) {
                                     BadgedBox(badge = { Badge { Text("$activeCount") } }) {
                                         Icon(icon, contentDescription = null)
                                     }
@@ -146,65 +142,56 @@ fun AppRoot(container: AppContainer) {
     ) { inner ->
         NavHost(
             navController = nav,
-            startDestination = "files",
+            startDestination = FilesRoute,
             enterTransition = { fadeIn(tween(220)) },
             exitTransition = { fadeOut(tween(160)) },
             popEnterTransition = { fadeIn(tween(220)) },
             popExitTransition = { fadeOut(tween(160)) },
             modifier = Modifier.padding(inner).consumeWindowInsets(inner),
         ) {
-            composable("files") { BrowserScreen(container, onPlay) }
-            composable("live") { LiveScreen(container) }
-            composable("downloads") { DownloadsScreen(container, onPlay, onEdit) }
-            composable("library") { LibraryScreen(container, onPlay, onEdit) }
-            composable("device") { DeviceScreen(container, onOpenSettings = { nav.navigate("settings") }) }
-            composable(
-                "settings",
+            composable<FilesRoute> { BrowserScreen(container, onPlay) }
+            composable<LiveRoute> { LiveScreen(container) }
+            composable<DownloadsRoute> { DownloadsScreen(container, onPlay, onEdit) }
+            composable<LibraryRoute> { LibraryScreen(container, onPlay, onEdit) }
+            composable<DeviceRoute> { DeviceScreen(container, onOpenSettings = { nav.navigate(SettingsRoute) }) }
+            composable<SettingsRoute>(
                 enterTransition = { pushIn() },
                 exitTransition = { fadeOut(tween(160)) },
                 popEnterTransition = { fadeIn(tween(220)) },
                 popExitTransition = { popOut() },
             ) { SettingsScreen(container, onBack = { nav.popBackStack() }) }
-            composable(
-                PLAYER_ROUTE,
-                arguments = listOf(
-                    navArgument("url") { type = NavType.StringType },
-                    navArgument("title") { type = NavType.StringType; defaultValue = "" },
-                ),
+            composable<PlayerRoute>(
                 enterTransition = { pushIn() },
                 exitTransition = { fadeOut(tween(160)) },
                 popEnterTransition = { fadeIn(tween(220)) },
                 popExitTransition = { popOut() },
             ) { entry ->
+                val route = entry.toRoute<PlayerRoute>()
                 PlayerScreen(
                     container = container,
-                    url = entry.arguments?.getString("url").orEmpty(),
-                    title = entry.arguments?.getString("title").orEmpty(),
+                    url = route.url,
+                    title = route.title,
+                    queueId = route.queue,
                     onBack = { nav.popBackStack() },
                     onEdit = onEdit,
                 )
             }
-            composable(
-                EDITOR_ROUTE,
-                arguments = listOf(
-                    navArgument("uri") { type = NavType.StringType },
-                    navArgument("title") { type = NavType.StringType; defaultValue = "" },
-                ),
+            composable<EditorRoute>(
                 enterTransition = { pushIn() },
                 exitTransition = { fadeOut(tween(160)) },
                 popEnterTransition = { fadeIn(tween(220)) },
                 popExitTransition = { popOut() },
             ) { entry ->
+                val route = entry.toRoute<EditorRoute>()
                 EditorScreen(
                     container = container,
-                    uri = entry.arguments?.getString("uri").orEmpty(),
-                    title = entry.arguments?.getString("title").orEmpty(),
+                    uri = route.uri,
+                    title = route.title,
                     onBack = { nav.popBackStack() },
-                    // 匯出完直接播剪好的影片；剪輯畫面從返回堆疊移除，返回時回到開剪輯之前的畫面
+                    // 匯出完直接播剪好的影片（只播這一支）；剪輯畫面從返回堆疊移除，返回時回到開剪輯之前的畫面
                     onOpenExported = { exportedUri, exportedTitle ->
-                        container.playQueue = listOf(PlayItem(exportedUri, exportedTitle))
-                        nav.navigate(playerRoute(exportedUri, exportedTitle)) {
-                            popUpTo(EDITOR_ROUTE) { inclusive = true }
+                        nav.navigate(PlayerRoute(exportedUri, exportedTitle)) {
+                            popUpTo<EditorRoute> { inclusive = true }
                         }
                     },
                 )
@@ -212,6 +199,7 @@ fun AppRoot(container: AppContainer) {
         }
     }
 }
+
 
 /** 通知（下載進度）與附近 Wi-Fi 裝置（區域網路存取）權限，第一次開啟時請求一次。 */
 @Composable

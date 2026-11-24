@@ -48,6 +48,7 @@ import tw.com.recora.data.PlayItem
 import tw.com.recora.download.DownloadTask
 import tw.com.recora.download.QueueProgress
 import tw.com.recora.download.TaskStatus
+import tw.com.recora.ui.OnPlay
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.MessagePane
 
@@ -55,7 +56,7 @@ import tw.com.recora.ui.common.MessagePane
 @Composable
 fun DownloadsScreen(
     container: AppContainer,
-    onPlay: (url: String, title: String) -> Unit,
+    onPlay: OnPlay,
     onEdit: (uri: String, title: String) -> Unit,
 ) {
     val settings by container.settings.state.collectAsStateWithLifecycle()
@@ -99,10 +100,10 @@ fun DownloadsScreen(
                         onRetry = { repo.retry(task.id) },
                         onPlay = {
                             task.resultUri?.let { uri ->
-                                container.playQueue = tasks
+                                val queue = tasks
                                     .filter { it.status == TaskStatus.Done && !it.file.isImage && it.resultUri != null }
                                     .map { PlayItem(it.resultUri.toString(), it.file.name) }
-                                onPlay(uri.toString(), task.file.name)
+                                onPlay(uri.toString(), task.file.name, queue)
                             }
                         },
                         onEdit = { task.resultUri?.let { onEdit(it.toString(), task.file.name) } },

@@ -58,3 +58,5 @@ okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver",
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+# 導覽的 type-safe routes（@Serializable 的目的地）
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

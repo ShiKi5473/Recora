@@ -18,7 +18,6 @@ import tw.com.recora.data.Brand
 import tw.com.recora.data.DashcamDeleter
 import tw.com.recora.data.DashcamFiles
 import tw.com.recora.data.DiagLog
-import tw.com.recora.data.PlayItem
 import tw.com.recora.data.SettingsStore
 import tw.com.recora.data.api.AstroApi
 import tw.com.recora.data.api.DashcamApi
@@ -36,6 +35,7 @@ import tw.com.recora.download.QueueStore
 import tw.com.recora.ui.common.MediaThumbFetcher
 import tw.com.recora.ui.editor.CalibrationJob
 import tw.com.recora.ui.editor.ClipExporter
+import tw.com.recora.ui.player.PlayQueues
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -123,9 +123,8 @@ class AppContainer(val app: Application) {
     /** 記錄器上的檔案變了（在播放器刪除）時通知「檔案」分頁重新整理。 */
     val dashcamChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
 
-    /** 播放器的清單：開啟播放時由來源頁面設定，播放器左右滑動切換（不在清單裡就只播單一檔案）。 */
-    @Volatile
-    var playQueue: List<PlayItem> = emptyList()
+    /** 開播放畫面時帶過去的播放清單（導覽參數只帶編號，見 [PlayQueues]）。 */
+    val playQueues = PlayQueues()
 
     /** debug 用：校正腳本指定的剪輯匯出，AppRoot 收到後開剪輯畫面（見 MainActivity.handleDebugIntent）。 */
     val calibrationJob = MutableStateFlow<CalibrationJob?>(null)

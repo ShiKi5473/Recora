@@ -117,6 +117,7 @@ import tw.com.recora.data.LocalMedia
 import tw.com.recora.data.MediaKind
 import tw.com.recora.data.PlayItem
 import tw.com.recora.download.MediaStoreSink
+import tw.com.recora.ui.OnPlay
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.DateGroups
 import tw.com.recora.ui.common.DateJumpButton
@@ -139,7 +140,7 @@ private val EDIT_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("MM/dd HH
 @Composable
 fun LibraryScreen(
     container: AppContainer,
-    onPlay: (uri: String, title: String) -> Unit,
+    onPlay: OnPlay,
     onEdit: (uri: String, title: String) -> Unit,
 ) {
     val vm: LibraryViewModel = viewModel(factory = LibraryViewModel.factory(container))
@@ -349,8 +350,7 @@ fun LibraryScreen(
                         selectionMode -> vm.toggle(item.uri)
                         item.kind == MediaKind.Photo -> viewingPhoto = item
                         else -> {
-                            container.playQueue = items.map { PlayItem(it.uri, it.name) }
-                            onPlay(item.uri, item.name)
+                            onPlay(item.uri, item.name, items.map { PlayItem(it.uri, it.name) })
                         }
                     }
                 }
