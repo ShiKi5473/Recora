@@ -88,6 +88,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 也可以直接用 Android Studio 開啟專案。APK 也能複製到手機上點開安裝（需允許「安裝不明應用程式」）。
 
+release 版用 R8 縮減程式與資源，原生庫只打包 `arm64-v8a`（約 20 MB）；debug 版不縮減，原生庫含 `arm64-v8a` 與模擬器用的 `x86_64`。
+release 版有地方閃退（多半是 `ClassNotFoundException`／`NoSuchMethodError`）時，在 `app/proguard-rules.pro` 補 keep 規則。
+
 debug 與 release 版統一使用專案專用的 `app/mufu-debug.keystore` 簽署（不與系統全域 `~/.android/debug.keystore` 共用，也不進 Git 版控），
 確保本機開發直裝與 GitHub Release 的 APK 可在手機上直接覆蓋升級。
 
