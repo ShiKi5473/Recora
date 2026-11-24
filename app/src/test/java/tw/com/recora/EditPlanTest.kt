@@ -60,4 +60,23 @@ class EditPlanTest {
         // 中間少了一段
         assertFalse(EditPlan.isContiguous(a, 180_000, LocalDateTime.of(2026, 9, 23, 13, 20, 59)))
     }
+
+    @Test
+    fun rangeFollowsJoinedSegments() {
+        // 終點在結尾：延伸到新一段的結尾；剪掉了結尾就不動
+        assertEquals(10_000f..240_000f, EditPlan.rangeAfterAppend(10_000f..180_000f, oldTotalMs = 180_000, addedMs = 60_000))
+        assertEquals(10_000f..170_000f, EditPlan.rangeAfterAppend(10_000f..170_000f, oldTotalMs = 180_000, addedMs = 60_000))
+        // 前面多一段：整個往後移
+        assertEquals(70_000f..240_000f, EditPlan.rangeAfterPrepend(10_000f..180_000f, addedMs = 60_000))
+    }
+
+    @Test
+    fun rangeAfterRemovingASegment() {
+        // 拿掉前面 60 秒：往前移、夾在剩下的 180 秒裡
+        assertEquals(0f..120_000f, EditPlan.rangeAfterRemove(30_000f..180_000f, 60_000, first = true, newTotalMs = 180_000, minClipMs = 500))
+        // 拿掉後面：終點夾到新的結尾
+        assertEquals(30_000f..180_000f, EditPlan.rangeAfterRemove(30_000f..220_000f, 60_000, first = false, newTotalMs = 180_000, minClipMs = 500))
+        // 選取範圍整個在拿掉的那段裡：改成全選
+        assertEquals(0f..180_000f, EditPlan.rangeAfterRemove(200_000f..230_000f, 60_000, first = false, newTotalMs = 180_000, minClipMs = 500))
+    }
 }

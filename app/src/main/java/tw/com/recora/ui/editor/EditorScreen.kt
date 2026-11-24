@@ -79,7 +79,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
@@ -299,16 +298,14 @@ fun EditorScreen(
         if (!contiguous) return "${next.name} 跟目前的片段沒有接在一起（中間可能少了一段）"
         val segment = Segment(next.uri, next.name, duration)
         if (forward) {
-            // 終點原本在時間軸最後面（沒剪掉結尾）就延伸到新一段的結尾，播放範圍才會接著播下去
             val oldTotal = segments.sumOf { it.durationMs }
             segments = segments + segment
             player.addMediaItem(MediaItem.fromUri(segment.uri))
-            if (range.endInclusive.roundToLong() >= oldTotal) range = range.start..(oldTotal + duration).toFloat()
+            range = EditPlan.rangeAfterAppend(range, oldTotal, duration)
         } else {
             segments = listOf(segment) + segments
             player.addMediaItem(0, MediaItem.fromUri(segment.uri))
-            // 時間軸前面多了一段，選取範圍跟著往後移
-            range = (range.start + duration)..(range.endInclusive + duration)
+            range = EditPlan.rangeAfterPrepend(range, duration)
         }
         return "已接上$which ${next.name}"
     }
@@ -332,87 +329,32 @@ fun EditorScreen(
         val removed = if (first) segments.first() else segments.last()
         segments = if (first) segments.drop(1) else segments.dropLast(1)
         player.removeMediaItem(if (first) 0 else player.mediaItemCount - 1)
-        val total = segments.sumOf { it.durationMs }.toFloat()
-        val shift = if (first) removed.durationMs.toFloat() else 0f
-        val start = (range.start - shift).coerceIn(0f, total)
-        val end = (range.endInclusive - shift).coerceIn(start, total)
-        range = if (end - start >= MIN_CLIP_MS) start..end else 0f..total
+        range = EditPlan.rangeAfterRemove(range, removed.durationMs, first, segments.sumOf { it.durationMs }, MIN_CLIP_MS)
     }
 
-    /**
-     * 依匯出設定 [s] 算出輸出的規格；讀不到來源的解析度、影格率時以 1920×1080、30 fps 計算。
-     * 不重新編碼時解析度跟原檔一樣，不看解析度設定。
-     */
-    fun outputSpec(s: AppSettings): OutputSpec {
-        val codec = effectiveCodec(s.exportCodec)
-        val video = player.videoSize
-        val srcW = video.width.takeIf { it > 0 } ?: 1920
-        val srcH = video.height.takeIf { it > 0 } ?: 1080
-        val scaledHeight = if (codec == ExportCodec.Original) null else ExportOptions.outputHeight(srcH, s.exportResolution)
-        val outW = if (scaledHeight != null) srcW * scaledHeight / srcH else srcW
-        val fps = player.videoFormat?.frameRate?.takeIf { it > 0 } ?: 30f
-        return OutputSpec(outW, scaledHeight ?: srcH, scaledHeight, fps, codec)
-    }
+    /** 預覽播放器目前讀到的來源資訊與量到的範圍資料量；來源容器看第一段的副檔名（接起來的段都是同一台記錄器）。 */
+    fun exportSource(): ExportSource = ExportSource(
+        width = player.videoSize.width,
+        height = player.videoSize.height,
+        frameRate = player.videoFormat?.frameRate ?: 0f,
+        audioBitrate = player.audioFormat?.bitrate,
+        container = FileNames.extension(segments.first().title),
+        averageBitrate = sourceBitrate,
+        rangeBytes = rangeBytes,
+    )
 
-    /** 依「App 設定」的匯出設定組出請求。 */
-    fun exportRequest(pieces: List<ExportPiece>): ExportRequest {
-        val s = container.settings.state.value
-        val spec = outputSpec(s)
-        return ExportRequest(
-            pieces = pieces,
-            removeAudio = removeAudio,
-            videoMimeType = when (spec.codec) {
-                ExportCodec.H264 -> MimeTypes.VIDEO_H264
-                ExportCodec.H265 -> MimeTypes.VIDEO_H265
-                ExportCodec.Original -> null
-            },
-            outputHeight = spec.scaledHeight,
-            bitrate = ExportOptions.bitrate(spec.width, spec.height, spec.fps, spec.codec, s.exportQuality),
-        )
-    }
+    /** 依匯出設定 [s] 與目前的範圍算出輸出規格、位元率與預估大小（計算在 [ExportEstimate]）。 */
+    fun estimate(s: AppSettings): ExportEstimate =
+        ExportEstimate(s, effectiveCodec(s.exportCodec), exportSource(), endMs - startMs, removeAudio)
 
-    /** 要求編碼器的影像位元率（見 [ExportOptions.videoBitrate]）；不重新編碼時是來源的平均位元率。 */
-    fun requestedVideoBitrate(s: AppSettings, spec: OutputSpec): Int =
-        ExportOptions.videoBitrate(spec.width, spec.height, spec.fps, spec.codec, s.exportQuality, sourceBitrate)
-
-    /** 原檔這一段的影像位元率；還沒量好時用整支檔案的平均，都沒有回 null。 */
-    fun sourceRangeBitrate(): Int? =
-        rangeBytes?.let { ExportOptions.averageBitrate(it.video, endMs - startMs) } ?: sourceBitrate
-
-    /** 重新編碼 MP4（Astro 的 H.264）時用畫面複雜度預估（見 [ExportOptions.complexityBitrate]）。 */
-    fun usesComplexity(spec: OutputSpec): Boolean =
-        complexitySource && spec.codec != ExportCodec.Original && sourceRangeBitrate() != null
-
-    /** 預估用的影像位元率：要求的位元率，或依畫面複雜度預估的實際輸出。 */
-    fun videoBitrate(s: AppSettings, spec: OutputSpec): Int {
-        val requested = requestedVideoBitrate(s, spec)
-        val source = sourceRangeBitrate()
-        if (!usesComplexity(spec) || source == null) return requested
-        val video = player.videoSize
-        val pixelRatio = if (video.width > 0 && video.height > 0) spec.width.toDouble() * spec.height / (video.width * video.height) else 1.0
-        return ExportOptions.complexityBitrate(requested, source, spec.codec, pixelRatio)
-    }
-
-    /** 預估倍數的 key（見 [ExportOptions.factorKey]）；來源容器看第一段的副檔名（接起來的段都是同一台記錄器）。 */
-    fun factorKey(s: AppSettings, spec: OutputSpec): String =
-        ExportOptions.factorKey(spec.codec, spec.height, s.exportQuality, FileNames.extension(segments.first().title), usesComplexity(spec))
-
-    /** 匯出檔的聲音位元率；去除聲音或來源沒有聲音（例如後鏡頭）時是 0。 */
-    fun audioBitrate(): Int {
-        val audio = player.audioFormat
-        return if (removeAudio || audio == null) 0 else audio.bitrate.takeIf { it > 0 } ?: ExportOptions.DEFAULT_AUDIO_BITRATE
-    }
-
-    /** 預估匯出一支的檔案大小（目前的範圍與匯出設定），用之前匯出學到的編碼器倍數校正。 */
-    fun estimatedBytes(s: AppSettings): Long {
-        val spec = outputSpec(s)
-        val measured = rangeBytes
-        if (spec.codec == ExportCodec.Original && measured != null) {
-            return ExportOptions.estimatedCopyBytes(measured.video, measured.audio, removeAudio)
-        }
-        val factor = ExportOptions.lookupFactor(s.exportBitrateFactors, factorKey(s, spec))
-        return ExportOptions.estimatedBytes(endMs - startMs, videoBitrate(s, spec), audioBitrate(), factor ?: 1f)
-    }
+    /** 依 [e]（匯出設定算出的規格）組出請求。 */
+    fun exportRequest(pieces: List<ExportPiece>, e: ExportEstimate): ExportRequest = ExportRequest(
+        pieces = pieces,
+        removeAudio = removeAudio,
+        videoMimeType = e.videoMimeType,
+        outputHeight = e.spec.scaledHeight,
+        bitrate = e.requestBitrate,
+    )
 
     fun export() {
         val durations = segments.map { it.durationMs }
@@ -426,14 +368,10 @@ fun EditorScreen(
             if (alsoOtherCamera && others != null && otherTitle != null) add(others to otherTitle)
         }
         // 匯出完用實際檔案大小校正預估（只看第一支：另一個鏡頭的解析度可能不同）
-        val spec = outputSpec(container.settings.state.value)
-        val requestedVideoBps = requestedVideoBitrate(container.settings.state.value, spec)
-        val predictedVideoBps = videoBitrate(container.settings.state.value, spec)
-        val complexity = usesComplexity(spec)
-        val factorKey = factorKey(container.settings.state.value, spec)
-        val audioBps = audioBitrate()
+        val s = container.settings.state.value
+        val plan = estimate(s)
+        val spec = plan.spec
         val clipMs = endMs - startMs
-        val estimate = estimatedBytes(container.settings.state.value)
         val startedAt = SystemClock.elapsedRealtime()
         player.pause()
         exportProgress = 0
@@ -446,7 +384,7 @@ fun EditorScreen(
                 for ((i, output) in outputs.withIndex()) {
                     val (uris, sourceTitle) = output
                     val name = LocalLibrary.editedName(sourceTitle, nameRange.first, nameRange.last, removeAudio)
-                    val request = exportRequest(pieces.map { p -> ExportPiece(uris[p.segment], p.startMs.takeIf { it > 0 }, p.endMs) })
+                    val request = exportRequest(pieces.map { p -> ExportPiece(uris[p.segment], p.startMs.takeIf { it > 0 }, p.endMs) }, plan)
                     val file = try {
                         exporter.export(request) { p -> exportProgress = (i * 100 + p) / outputs.size }
                     } catch (e: ExportException) {
@@ -454,25 +392,23 @@ fun EditorScreen(
                         break
                     }
                     if (i == 0) {
-                        val measuredFactor = ExportOptions.measuredFactor(file.length(), clipMs, predictedVideoBps, audioBps)
+                        val measuredFactor = ExportOptions.measuredFactor(file.length(), clipMs, plan.predictedVideoBitrate, plan.audioBitrate)
                         // debug build：校正預估用，腳本從 logcat 收集（adb logcat -s RecoraExport）
                         if (BuildConfig.DEBUG) {
                             Log.i(
                                 "RecoraExport",
                                 "name=$name codec=${spec.codec} size=${spec.width}x${spec.height} " +
-                                    "quality=${container.settings.state.value.exportQuality} mute=$removeAudio segments=${segments.size} " +
-                                    "clipMs=$clipMs estimate=$estimate srcVideoBytes=${rangeBytes?.video} srcAudioBytes=${rangeBytes?.audio} actual=${file.length()} videoBps=$requestedVideoBps predictedBps=$predictedVideoBps " +
-                                    "audioBps=$audioBps factorKey=$factorKey factorBefore=${container.settings.state.value.exportBitrateFactors[factorKey]} " +
+                                    "quality=${s.exportQuality} mute=$removeAudio segments=${segments.size} " +
+                                    "clipMs=$clipMs estimate=${plan.estimatedBytes} srcVideoBytes=${rangeBytes?.video} srcAudioBytes=${rangeBytes?.audio} actual=${file.length()} " +
+                                    "videoBps=${plan.requestedVideoBitrate} predictedBps=${plan.predictedVideoBitrate} " +
+                                    "audioBps=${plan.audioBitrate} factorKey=${plan.factorKey} factorBefore=${container.settings.state.value.exportBitrateFactors[plan.factorKey]} " +
                                     "measured=$measuredFactor tookMs=${SystemClock.elapsedRealtime() - startedAt}",
                             )
                         }
                         measuredFactor?.let { measured ->
-                            container.appScope.launch {
-                                container.settings.update {
-                                    val old = it.exportBitrateFactors[factorKey]
-                                    val merged = if (complexity) ExportOptions.mergeCorrection(old, measured) else ExportOptions.mergeFactor(old, measured)
-                                    it.copy(exportBitrateFactors = it.exportBitrateFactors + (factorKey to merged))
-                                }
+                            container.settings.launchUpdate {
+                                val old = it.exportBitrateFactors[plan.factorKey]
+                                it.copy(exportBitrateFactors = it.exportBitrateFactors + (plan.factorKey to plan.mergedFactor(old, measured)))
                             }
                         }
                     }
@@ -628,10 +564,12 @@ fun EditorScreen(
                     }
                 }
                 if (totalMs > 0) {
-                    val estimate = remember(formatVersion, sourceBitrate, rangeBytes, startMs, endMs, removeAudio, settings) { estimatedBytes(settings) }
+                    val estimatedSize = remember(formatVersion, sourceBitrate, rangeBytes, startMs, endMs, removeAudio, settings) {
+                        estimate(settings).estimatedBytes
+                    }
                     val another = alsoOtherCamera && counterpartUris != null
                     Text(
-                        "預估檔案大小 約 ${Formats.size(estimate)}" +
+                        "預估檔案大小 約 ${Formats.size(estimatedSize)}" +
                             (if (another) "（另一個鏡頭的那支另計）" else "") +
                             "，實際大小依畫面變化多寡而定",
                         style = MaterialTheme.typography.bodySmall,
@@ -778,10 +716,7 @@ fun EditorScreen(
                         settings = settings,
                         update = { transform -> container.settings.launchUpdate(transform) },
                         showMuteDefault = false,
-                        qualityBitrate = { q ->
-                            val spec = outputSpec(settings)
-                            ExportOptions.videoBitrate(spec.width, spec.height, spec.fps, spec.codec, q)
-                        },
+                        qualityBitrate = { q -> estimate(settings).qualityBitrate(q) },
                     )
                     Text(
                         "改的是「App 設定」裡的值，之後的剪輯也會沿用。",
@@ -810,9 +745,6 @@ fun EditorScreen(
         )
     }
 }
-
-/** 匯出的輸出規格；[scaledHeight] = null 表示維持原始解析度（不縮放）。 */
-private data class OutputSpec(val width: Int, val height: Int, val scaledHeight: Int?, val fps: Float, val codec: ExportCodec)
 
 private const val MIN_CLIP_MS = 500L
 

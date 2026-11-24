@@ -3,6 +3,7 @@ package tw.com.recora.data
 import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 /** 剪輯時間軸上的一段來源（跨段剪輯時依錄影時間接起來）。 */
 data class Segment(val uri: String, val title: String, val durationMs: Long)
@@ -50,6 +51,35 @@ object EditPlan {
     fun nameRange(durations: List<Long>, startMs: Long, endMs: Long): Pair<Int, LongRange>? {
         val first = pieces(durations, startMs, endMs).firstOrNull() ?: return null
         return first.segment to first.startMs..(first.startMs + (endMs - startMs))
+    }
+
+    /**
+     * 時間軸後面接上長 [addedMs] 的一段後的選取範圍（[oldTotalMs] = 接上前的總長）：
+     * 終點原本在最後面（沒剪掉結尾）就延伸到新一段的結尾，播放範圍才會接著播下去。
+     */
+    fun rangeAfterAppend(range: ClosedFloatingPointRange<Float>, oldTotalMs: Long, addedMs: Long): ClosedFloatingPointRange<Float> =
+        if (range.endInclusive.roundToLong() >= oldTotalMs) range.start..(oldTotalMs + addedMs).toFloat() else range
+
+    /** 時間軸前面接上長 [addedMs] 的一段：選取範圍跟著往後移。 */
+    fun rangeAfterPrepend(range: ClosedFloatingPointRange<Float>, addedMs: Long): ClosedFloatingPointRange<Float> =
+        (range.start + addedMs)..(range.endInclusive + addedMs)
+
+    /**
+     * 拿掉時間軸最前面（[first]）或最後面長 [removedMs] 的一段後的選取範圍（[newTotalMs] = 剩下的總長）：
+     * 夾在剩下的時間軸裡；剩不到 [minClipMs] 就改成全選。
+     */
+    fun rangeAfterRemove(
+        range: ClosedFloatingPointRange<Float>,
+        removedMs: Long,
+        first: Boolean,
+        newTotalMs: Long,
+        minClipMs: Long,
+    ): ClosedFloatingPointRange<Float> {
+        val total = newTotalMs.toFloat()
+        val shift = if (first) removedMs.toFloat() else 0f
+        val start = (range.start - shift).coerceIn(0f, total)
+        val end = (range.endInclusive - shift).coerceIn(start, total)
+        return if (end - start >= minClipMs) start..end else 0f..total
     }
 
     /** 前一段結束的時間與下一段開始的時間差在 [toleranceMs] 內 = 首尾相接（檔名時間只到秒）。 */
