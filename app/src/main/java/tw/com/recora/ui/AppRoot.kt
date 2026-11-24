@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -51,6 +52,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import tw.com.recora.AppContainer
 import tw.com.recora.data.PlayItem
 import tw.com.recora.ui.browser.BrowserScreen
@@ -90,8 +93,10 @@ fun AppRoot(container: AppContainer) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
-    val tasks by container.downloads.tasks.collectAsStateWithLifecycle()
-    val activeCount = tasks.count { it.isActive }
+    // 只取進行中的數量：下載進度每 300 ms 更新一次 tasks，整個 AppRoot（Scaffold、導覽列）不必跟著重組
+    val activeCount by remember(container) {
+        container.downloads.tasks.map { tasks -> tasks.count { it.isActive } }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = container.downloads.tasks.value.count { it.isActive })
     val onPlay: (String, String) -> Unit = { url, title -> nav.navigate(playerRoute(url, title)) }
     val onEdit: (String, String) -> Unit = { uri, title -> nav.navigate(editorRoute(uri, title)) }
     // debug：校正腳本指定的剪輯匯出；先關掉之前的剪輯畫面（釋放它的播放器），EditorScreen 自己接手這個工作
