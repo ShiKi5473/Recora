@@ -35,6 +35,13 @@ class GpsTrack(val points: List<GpsPoint?>) {
     fun pointAt(positionMs: Long): GpsPoint? =
         if (positionMs < 0) null else points.getOrNull((positionMs / 1000).toInt())
 
+    /**
+     * 播放器顯示用的那一秒：同 [pointAt]，但片長比筆數多一點點（例如 60.05 秒、60 筆；播完會停在片長）時，
+     * 最後那一點點算最後一筆。
+     */
+    fun pointForPosition(positionMs: Long): GpsPoint? =
+        pointAt(positionMs) ?: points.lastOrNull().takeIf { positionMs / 1000 == points.size.toLong() }
+
     /** 已定位的點（第幾秒, 記錄），畫路線用。 */
     val fixes: List<Pair<Int, GpsPoint>> by lazy {
         points.mapIndexedNotNull { i, p -> if (p?.fix == true) i to p else null }

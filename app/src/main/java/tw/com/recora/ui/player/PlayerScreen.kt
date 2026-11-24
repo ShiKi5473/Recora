@@ -88,7 +88,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -112,9 +111,10 @@ import tw.com.recora.data.FileNames
 import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.PlayItem
 import tw.com.recora.data.PlayOrder
+import tw.com.recora.data.PlaySources
+import tw.com.recora.data.PlayTargets
 import tw.com.recora.data.gps.GpsPoint
 import tw.com.recora.data.gps.GpsTrack
-import tw.com.recora.data.gps.Gpx
 import tw.com.recora.data.gps.LocalGps
 import tw.com.recora.data.net.ConnState
 import tw.com.recora.ui.Formats
@@ -130,7 +130,6 @@ import tw.com.recora.ui.common.rememberDashcamGrant
 import tw.com.recora.ui.common.rememberMediaDeleter
 import tw.com.recora.ui.common.shareMedia
 import tw.com.recora.ui.common.zoomGestures
-import java.io.File
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
@@ -198,22 +197,17 @@ fun PlayerScreen(
     var loadJob by remember { mutableStateOf<Job?>(null) }
     var endHandled by remember { mutableStateOf(false) }
 
-    /** 手機上已下載完成的同名影片（content://，含 Astro App 的資料夾），沒有回 null。 */
-    suspend fun localCopy(name: String): String? = withContext(Dispatchers.IO) {
-        runCatching { container.sink.findVideo(name) }.getOrNull()?.toString()
-    }
+    // 換段、換鏡頭時實際要播哪個檔案由 PlayTargets 決定；這裡只提供去哪裡找
+    val sources = remember(container) {
+        object : PlaySources {
+            /** 手機上已下載完成的同名影片（content://，含 Astro App 的資料夾）。 */
+            override suspend fun localCopy(name: String): String? = withContext(Dispatchers.IO) {
+                runCatching { container.sink.findVideo(name) }.getOrNull()?.toString()
+            }
 
-    /** 另一個鏡頭的同一段：手機上有就播手機上的，否則從記錄器串流（不先探測，沒有這個檔時播放會失敗並提示）。 */
-    suspend fun counterpart(item: PlayItem): PlayItem? {
-        val name = FileNames.counterpartName(item.title) ?: return null
-        val sdPath = item.sdPath?.let(FileNames::counterpartPath)
-        localCopy(name)?.let { return PlayItem(it, name, sdPath) }
-        return sdPath?.let { PlayItem(container.api.httpUrl(it), name, it) }
+            override fun streamUrl(sdPath: String): String = container.api.httpUrl(sdPath)
+        }
     }
-
-    /** 記錄器上的檔案已經下載到手機的話改播手機上的：不占用記錄器的連線，也能剪輯。 */
-    suspend fun preferLocal(item: PlayItem): PlayItem =
-        if (item.isLocal) item else localCopy(item.title)?.let { item.copy(url = it) } ?: item
 
     fun play(item: PlayItem, positionMs: Long = 0, autoPlay: Boolean = true) {
         current = item
@@ -232,10 +226,7 @@ fun PlayerScreen(
         index = target
         val base = queue[target]
         loadJob?.cancel()
-        loadJob = scope.launch {
-            val item = (if (otherCamera) counterpart(base) else null) ?: base
-            play(preferLocal(item))
-        }
+        loadJob = scope.launch { play(PlayTargets.resolve(base, otherCamera, sources)) }
     }
 
     /** 換段：[delta] > 0 播錄影時間的下一段（較新），< 0 播上一段（較舊）。清單是新到舊排列，所以不是 index ± 1。 */
@@ -256,13 +247,13 @@ fun PlayerScreen(
         val toOther = current.title == base.title
         loadJob?.cancel()
         loadJob = scope.launch {
-            val item = if (toOther) counterpart(base) else base
+            val item = if (toOther) PlayTargets.counterpart(base, sources) else base
             if (item == null) {
                 toast("找不到另一個鏡頭的檔案")
                 return@launch
             }
             otherCamera = toOther
-            play(preferLocal(item), position, autoPlay = wasPlaying)
+            play(PlayTargets.preferLocal(item, sources), position, autoPlay = wasPlaying)
         }
     }
 
@@ -400,11 +391,8 @@ fun PlayerScreen(
     }
     val hasGpsFix = remember(gps) { gps?.points?.any { it?.fix == true } == true }
 
-    /** 播放位置那一秒的 GPS。片長比筆數多一點點（例如 60.05 秒、60 筆；播完會停在片長）時，最後那一點點算最後一筆。 */
-    fun gpsAt(ms: Long): GpsPoint? {
-        val track = gps ?: return null
-        return track.pointAt(ms) ?: track.points.lastOrNull().takeIf { ms / 1000 == track.points.size.toLong() }
-    }
+    /** 播放位置那一秒的 GPS（見 [GpsTrack.pointForPosition]）。 */
+    fun gpsAt(ms: Long): GpsPoint? = gps?.pointForPosition(ms)
     val gpsText = if (settings.showGps && gps != null) gpsLabel(gpsAt(positionMs)) else null
 
     /** 用地圖 App 開啟目前這一秒的位置（外部 App 不受本 App 綁在記錄器網路上的影響）。 */
@@ -424,24 +412,12 @@ fun PlayerScreen(
         }
     }
 
-    /**
-     * 整段的 GPS 軌跡寫成 GPX 分享出去（暫存在快取的 gpx/）。
-     * 只清掉 1 小時前的舊檔：雲端硬碟等會在背景晚一點才讀，剛分享的不能馬上刪。
-     */
+    /** 整段的 GPS 軌跡寫成 GPX 分享出去（見 [writeGpxForShare]）。 */
     fun shareGpx() {
         val track = gps ?: return
         val name = current.title.substringBeforeLast('.')
         scope.launch {
-            val uri = withContext(Dispatchers.IO) {
-                runCatching {
-                    val text = Gpx.write(name, track) ?: return@runCatching null
-                    val dir = File(context.cacheDir, "gpx").apply { mkdirs() }
-                    val expired = System.currentTimeMillis() - GPX_KEEP_MS
-                    dir.listFiles()?.filter { it.lastModified() < expired }?.forEach { it.delete() }
-                    val file = File(dir, "$name.gpx").apply { writeText(text) }
-                    FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-                }.getOrNull()
-            }
+            val uri = writeGpxForShare(context, name, track)
             if (uri == null) toast("無法產生 GPS 軌跡") else shareMedia(context, listOf(uri), "application/gpx+xml")
         }
     }
@@ -462,16 +438,14 @@ fun PlayerScreen(
 
     /** 刪掉的那一段從清單移除，接著播下一段（已經是最後一段就播前一段，清單空了就離開）。 */
     fun dropFromQueue() {
-        val removed = index
-        val rest = queue.filterIndexed { i, _ -> i != removed }
-        if (rest.isEmpty()) {
+        val (rest, next) = PlayOrder.remove(queue, index) ?: run {
             onBack()
             return
         }
         queue = rest
         // 畫面重建（從剪輯頁回來）時清單由 playQueue 重建，刪掉的那一段也要拿掉
         container.playQueue = rest
-        playAt(removed.coerceAtMost(rest.lastIndex))
+        playAt(next)
     }
 
     val deleteItem = rememberMediaDeleter(container, toast) { item, deleted ->
@@ -739,9 +713,6 @@ private const val CONTROLS_HIDE_MS = 3_000L
 
 /** 拖曳進度時 seek 的最短間隔。 */
 private const val SCRUB_SEEK_INTERVAL_MS = 200L
-
-/** 分享用的 GPX 暫存檔保留多久。 */
-private const val GPX_KEEP_MS = 60 * 60 * 1000L
 
 private fun mediaItem(item: PlayItem): MediaItem = MediaItem.Builder().setUri(item.url).setMediaId(item.url).build()
 

@@ -49,4 +49,41 @@ object PlayOrder {
             }
         return (if (later) candidates.minByOrNull { it.second } else candidates.maxByOrNull { it.second })?.first
     }
+
+    /**
+     * 從清單拿掉第 [index] 段（刪掉了）：回傳剩下的清單與接著要播的位置（原本的下一項，已經是最後一項就播前一項）；
+     * 清單空了回 null。
+     */
+    fun remove(items: List<PlayItem>, index: Int): Pair<List<PlayItem>, Int>? {
+        val rest = items.filterIndexed { i, _ -> i != index }
+        return if (rest.isEmpty()) null else rest to index.coerceIn(0, rest.lastIndex)
+    }
+}
+
+/** 播放器找檔案的地方：手機上已下載的同名影片、記錄器上的串流網址。 */
+interface PlaySources {
+    /** 手機上已下載完成的同名影片（content://），沒有回 null。 */
+    suspend fun localCopy(name: String): String?
+
+    /** 記錄器上這個路徑的串流網址（不探測）。 */
+    fun streamUrl(sdPath: String): String
+}
+
+/** 播放器換段、換鏡頭時決定實際要播的檔案。 */
+object PlayTargets {
+    /** 另一個鏡頭的同一段：手機上有就播手機上的，否則從記錄器串流（不先探測，沒有這個檔時播放會失敗並提示）；看不出鏡頭回 null。 */
+    suspend fun counterpart(item: PlayItem, sources: PlaySources): PlayItem? {
+        val name = FileNames.counterpartName(item.title) ?: return null
+        val sdPath = item.sdPath?.let(FileNames::counterpartPath)
+        sources.localCopy(name)?.let { return PlayItem(it, name, sdPath) }
+        return sdPath?.let { PlayItem(sources.streamUrl(it), name, it) }
+    }
+
+    /** 記錄器上的檔案已經下載到手機的話改播手機上的：不占用記錄器的連線，也能剪輯。 */
+    suspend fun preferLocal(item: PlayItem, sources: PlaySources): PlayItem =
+        if (item.isLocal) item else sources.localCopy(item.title)?.let { item.copy(url = it) } ?: item
+
+    /** 清單裡的 [base] 實際要播的檔案：切到另一鏡頭時（[otherCamera]）盡量播另一鏡頭；手機上有就播手機上的。 */
+    suspend fun resolve(base: PlayItem, otherCamera: Boolean, sources: PlaySources): PlayItem =
+        preferLocal((if (otherCamera) counterpart(base, sources) else null) ?: base, sources)
 }
