@@ -190,7 +190,7 @@ fun LibraryScreen(
     val byDate = remember(items) { items.groupBy { it.time.toLocalDate() } }
 
     fun setGrid(on: Boolean) {
-        container.appScope.launch { container.settings.update { it.copy(libraryGrid = on) } }
+        container.settings.launchUpdate { it.copy(libraryGrid = on) }
     }
 
     Scaffold(

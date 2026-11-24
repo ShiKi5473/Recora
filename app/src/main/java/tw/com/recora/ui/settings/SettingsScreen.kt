@@ -68,7 +68,7 @@ typealias SettingsUpdate = ((AppSettings) -> AppSettings) -> Unit
 fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
     val settings by container.settings.state.collectAsStateWithLifecycle()
     // 用 App 的 scope 寫入：改完馬上離開這頁也會存到
-    val update: SettingsUpdate = { transform -> container.appScope.launch { container.settings.update(transform) } }
+    val update: SettingsUpdate = { transform -> container.settings.launchUpdate(transform) }
 
     Scaffold(
         topBar = {

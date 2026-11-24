@@ -3,6 +3,7 @@ package tw.com.recora.download
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
+import android.content.IntentSender
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -77,10 +78,11 @@ class MediaStoreSink(
     /** 已完成下載的檔案：大寫檔名 → 大小。 */
     fun downloaded(): Map<String, Long> = downloadedEntries().mapValues { it.value.size }
 
-    fun create(name: String, isImage: Boolean, subdir: String? = null): Uri {
+    /** 在相簿建立一個 pending 檔（寫完再 [finish]）；[mime] 預設依副檔名。 */
+    fun create(name: String, isImage: Boolean, subdir: String? = null, mime: String = FileNames.mimeType(name)): Uri {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, FileNames.mimeType(name))
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath(isImage, subdir))
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -106,6 +108,28 @@ class MediaStoreSink(
 
     fun delete(uri: Uri) {
         resolver.delete(uri, null, null)
+    }
+
+    /** [deleteOrRequest] 的結果：[deleted] = 直接刪掉的數量，[confirm] = 剩下要系統確認的（沒有則為 null）。 */
+    data class DeleteResult(val deleted: Int, val confirm: IntentSender?)
+
+    /**
+     * 刪除相簿裡的檔案。本 App 建立的直接刪；不是本 App 建立的（例如重新安裝前下載的）會被拒絕（SecurityException），
+     * 集中成一個系統確認視窗，不必一個一個按。
+     */
+    fun deleteOrRequest(uris: List<Uri>): DeleteResult {
+        val needConfirm = ArrayList<Uri>()
+        var deleted = 0
+        for (uri in uris) {
+            try {
+                delete(uri)
+                deleted++
+            } catch (e: SecurityException) {
+                needConfirm += uri
+            }
+        }
+        val confirm = if (needConfirm.isEmpty()) null else MediaStore.createDeleteRequest(resolver, needConfirm).intentSender
+        return DeleteResult(deleted, confirm)
     }
 
     /** 把本機檔（例如剪輯輸出的 MP4）複製進相簿，回傳新的 Uri。 */
@@ -184,19 +208,9 @@ class MediaStoreSink(
         return counts.map { (path, count) -> MediaFolder(path, count) }
     }
 
-    private fun createNamed(displayName: String, mime: String, isImage: Boolean): Uri {
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath(isImage))
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        return resolver.insert(collection(isImage), values) ?: throw IOException("無法在相簿建立檔案")
-    }
-
     /** 建立新檔、寫入、標成完成；寫入失敗時刪掉建了一半的檔案，不會留在相簿的「未完成的下載暫存檔」裡。 */
     private fun writeNew(displayName: String, mime: String, isImage: Boolean, write: (OutputStream) -> Unit): Uri {
-        val uri = createNamed(displayName, mime, isImage)
+        val uri = create(displayName, isImage, mime = mime)
         try {
             resolver.openOutputStream(uri)?.use(write) ?: throw IOException("無法寫入相簿")
             finish(uri)

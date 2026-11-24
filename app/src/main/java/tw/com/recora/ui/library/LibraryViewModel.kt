@@ -2,7 +2,6 @@ package tw.com.recora.ui.library
 
 import android.content.IntentSender
 import android.net.Uri
-import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
@@ -153,29 +152,14 @@ class LibraryViewModel(private val c: AppContainer) : ViewModel() {
     fun delete(items: List<LocalMedia>) {
         if (items.isEmpty()) return
         viewModelScope.launch {
-            val needConfirm = ArrayList<Uri>()
-            var deleted = 0
-            withContext(Dispatchers.IO) {
-                for (item in items) {
-                    val uri = Uri.parse(item.uri)
-                    try {
-                        c.sink.delete(uri)
-                        deleted++
-                    } catch (e: SecurityException) {
-                        needConfirm += uri
-                    }
-                }
-            }
+            val result = withContext(Dispatchers.IO) { c.sink.deleteOrRequest(items.map { Uri.parse(it.uri) }) }
             clearSelection()
-            if (deleted > 0) {
-                _messages.trySend(if (items.size == 1) "已刪除 ${items[0].name}" else "已刪除 $deleted 個檔案")
+            if (result.deleted > 0) {
+                _messages.trySend(if (items.size == 1) "已刪除 ${items[0].name}" else "已刪除 ${result.deleted} 個檔案")
                 // 相簿自己會收到並重新整理；「檔案」頁的已下載打勾也要跟著更新
                 c.libraryChanged.tryEmit(Unit)
             }
-            if (needConfirm.isNotEmpty()) {
-                val request = MediaStore.createDeleteRequest(c.app.contentResolver, needConfirm)
-                _deleteRequests.trySend(request.intentSender)
-            }
+            result.confirm?.let { _deleteRequests.trySend(it) }
         }
     }
 

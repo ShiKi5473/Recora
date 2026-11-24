@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import tw.com.recora.data.Brand
+import tw.com.recora.data.DashcamDeleter
 import tw.com.recora.data.DashcamFiles
 import tw.com.recora.data.DiagLog
 import tw.com.recora.data.PlayItem
@@ -111,7 +112,9 @@ class AppContainer(val app: Application) {
      */
     val api: DashcamApi get() = guarded[connection.currentBrand] ?: guarded.getValue(Brand.Mufu)
 
-    val files = DashcamFiles({ api }, connection, appScope).also { astro.onRecordingResumed = it::invalidateAll }
+    val files = DashcamFiles({ api }, connection.state.map { it is ConnState.Connected }, appScope)
+        .also { astro.onRecordingResumed = it::invalidateAll }
+    val deleter = DashcamDeleter({ api }, files)
     val eventBackup = EventBackup(files, sink, downloads, settings)
 
     /** 相簿內容變了（匯出、刪除）時通知相簿分頁重新整理。 */

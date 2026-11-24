@@ -119,7 +119,7 @@ fun LibraryFoldersDialog(container: AppContainer, onDismiss: () -> Unit) {
             TextButton(onClick = {
                 val chosen = selected
                 // 用 App 的 scope 寫入：關掉對話框馬上離開這頁也會存到
-                container.appScope.launch { container.settings.update { it.copy(libraryFolders = chosen) } }
+                container.settings.launchUpdate { it.copy(libraryFolders = chosen) }
                 onDismiss()
             }) { Text("完成") }
         },

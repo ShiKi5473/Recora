@@ -4,13 +4,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import tw.com.recora.data.api.DashcamApi
-import tw.com.recora.data.net.ConnState
-import tw.com.recora.data.net.DashcamConnection
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -25,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap
 class DashcamFiles(
     /** 目前連著的記錄器（換記錄器一定會先斷線、清空快取）。 */
     private val api: () -> DashcamApi,
-    connection: DashcamConnection,
+    /** 是否連著記錄器：斷線時清空快取。 */
+    connected: Flow<Boolean>,
     scope: CoroutineScope,
 ) {
     private val cache = ConcurrentHashMap<Folder, List<DashcamFile>>()
@@ -37,9 +35,7 @@ class DashcamFiles(
 
     init {
         scope.launch {
-            connection.state.map { it is ConnState.Connected }.distinctUntilChanged().collect { connected ->
-                if (!connected) invalidateAll()
-            }
+            connected.distinctUntilChanged().collect { if (!it) invalidateAll() }
         }
     }
 

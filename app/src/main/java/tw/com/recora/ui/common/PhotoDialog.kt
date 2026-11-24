@@ -126,7 +126,7 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
                     }
                 }
                 if (photo != null) {
-                    if (isLocal(photo)) {
+                    if (photo.isLocal) {
                         IconButton(onClick = { shareMedia(context, listOf(Uri.parse(photo.url)), "image/*") }) {
                             Icon(Icons.Filled.Share, contentDescription = "分享", tint = Color.White)
                         }
@@ -135,7 +135,7 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
                             Icon(Icons.Filled.Download, contentDescription = "下載", tint = Color.White)
                         }
                     }
-                    if (isDeletable(photo)) {
+                    if (photo.isDeletable) {
                         IconButton(onClick = { pendingDelete = photo }) {
                             Icon(Icons.Filled.Delete, contentDescription = "刪除", tint = Color.White)
                         }
@@ -144,7 +144,7 @@ fun PhotoDialog(container: AppContainer, photos: List<PlayItem>, startIndex: Int
             }
         }
         pendingDelete?.let { item ->
-            val local = isLocal(item)
+            val local = item.isLocal
             ConfirmDeleteDialog(
                 title = if (local) "從手機相簿刪除？" else "從記錄器刪除？",
                 onDismiss = { pendingDelete = null },

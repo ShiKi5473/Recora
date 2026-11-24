@@ -126,8 +126,6 @@ import tw.com.recora.ui.common.OverlayTopBar
 import tw.com.recora.ui.theme.Scrim
 import tw.com.recora.ui.common.ZoomState
 import tw.com.recora.ui.common.captureFrame
-import tw.com.recora.ui.common.isDeletable
-import tw.com.recora.ui.common.isLocal
 import tw.com.recora.ui.common.rememberDashcamGrant
 import tw.com.recora.ui.common.rememberMediaDeleter
 import tw.com.recora.ui.common.shareMedia
@@ -169,13 +167,13 @@ fun PlayerScreen(
     var current by session::current
     var otherCamera by session::otherCamera
     // 從記錄器串流的清單用較小的 TS 搜尋範圍（見 dashcamMediaSourceFactory）
-    val streaming = remember { queue.any { it.url.startsWith("http") } }
+    val streaming = remember { queue.any { it.isStreaming } }
     // 記錄器一次只服務一個連線：從記錄器串流時先取得使用權（暫停下載佇列、Astro 停錄並切到回放模式），
     // 拿到之後才開始載入；進背景、離開或改播手機上的檔案時歸還，下載從中斷處繼續
     val dashcamReady = rememberDashcamGrant(
         container,
         reason = "正在播放記錄器上的影片",
-        enabled = current.url.startsWith("http"),
+        enabled = current.isStreaming,
         files = true,
     ) { toast("已暫停下載，離開播放畫面後會從中斷處繼續") }
     val player = remember {
@@ -184,7 +182,7 @@ fun PlayerScreen(
             // 每段播完停下；要不要接著播下一段由 onEnded 決定
             pauseAtEndOfMediaItems = true
             // 記錄器上的檔案等拿到使用權才載入（見下方 LaunchedEffect(dashcamReady.value)）
-            if (!current.url.startsWith("http")) prepare()
+            if (!current.isStreaming) prepare()
             playWhenReady = session.resumePlaying
         }
     }
@@ -215,14 +213,14 @@ fun PlayerScreen(
 
     /** 記錄器上的檔案已經下載到手機的話改播手機上的：不占用記錄器的連線，也能剪輯。 */
     suspend fun preferLocal(item: PlayItem): PlayItem =
-        if (isLocal(item)) item else localCopy(item.title)?.let { item.copy(url = it) } ?: item
+        if (item.isLocal) item else localCopy(item.title)?.let { item.copy(url = it) } ?: item
 
     fun play(item: PlayItem, positionMs: Long = 0, autoPlay: Boolean = true) {
         current = item
         error = null
         endHandled = false
         // 記錄器上的檔案要等拿到使用權才載入：先停掉，免得換了網址就馬上開始讀
-        val wait = item.url.startsWith("http") && !dashcamReady.value
+        val wait = item.isStreaming && !dashcamReady.value
         if (wait) player.stop()
         player.setMediaItem(mediaItem(item), positionMs)
         if (!wait) player.prepare()
@@ -283,7 +281,7 @@ fun PlayerScreen(
 
     fun toggleAutoPlay() {
         val on = !settings.autoPlayNext
-        container.appScope.launch { container.settings.update { it.copy(autoPlayNext = on) } }
+        container.settings.launchUpdate { it.copy(autoPlayNext = on) }
         toast(if (on) "播完會自動播下一段（依錄影時間）" else "播完停在這一段")
     }
 
@@ -309,7 +307,7 @@ fun PlayerScreen(
 
     // 拿到記錄器的使用權才開始載入串流；歸還時（App 進背景）停止載入、把連線讓給下載，回來再從同一個位置接著載入
     LaunchedEffect(dashcamReady.value) {
-        if (!current.url.startsWith("http")) return@LaunchedEffect
+        if (!current.isStreaming) return@LaunchedEffect
         if (dashcamReady.value) {
             if (player.playbackState == Player.STATE_IDLE) {
                 error = null
@@ -338,7 +336,7 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(e: PlaybackException) {
-                val message = playbackErrorMessage(e, streaming = current.url.startsWith("http"))
+                val message = playbackErrorMessage(e, streaming = current.isStreaming)
                 val showingOther = current.title != queue.getOrNull(index)?.title
                 error = if (showingOther && e.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
                     "記錄器上沒有對應的另一鏡頭檔"
@@ -352,9 +350,9 @@ fun PlayerScreen(
                 player.pause()
                 // 串流中：暫停時 ExoPlayer 仍會預讀、佔住記錄器的連線（Astro 切回錄影模式後也讀不到），
                 // stop 才會關掉；清單與位置都留著。不會觸發 onPlayerError，也不是播完（STATE_IDLE 不是 ENDED）
-                if (current.url.startsWith("http")) player.stop()
+                if (current.isStreaming) player.stop()
             } else if (event == Lifecycle.Event.ON_START && player.playbackState == Player.STATE_IDLE &&
-                !current.url.startsWith("http")
+                !current.isStreaming
             ) {
                 // 回到 App：重新載入、維持暫停（註冊時立刻收到的 ON_START 播放器還不是 IDLE，不會走到這裡）
                 error = null
@@ -398,7 +396,7 @@ fun PlayerScreen(
     // 讀完才換掉（讀檔只要幾 ms）：先清成 null 的話，換段時路線地圖會被拆掉再重建
     val gps by produceState<GpsTrack?>(null, current.url) {
         val item = current
-        value = if (isLocal(item)) LocalGps.read(context, item.url) else null
+        value = if (item.isLocal) LocalGps.read(context, item.url) else null
     }
     val hasGpsFix = remember(gps) { gps?.points?.any { it?.fix == true } == true }
 
@@ -504,7 +502,7 @@ fun PlayerScreen(
 
     fun toggleMap() {
         val on = !settings.showRouteMap
-        container.appScope.launch { container.settings.update { it.copy(showRouteMap = on) } }
+        container.settings.launchUpdate { it.copy(showRouteMap = on) }
     }
 
     FullscreenEffect(fullscreen) { fullscreen = false }
@@ -601,7 +599,7 @@ fun PlayerScreen(
                             Icon(Icons.Filled.CameraAlt, contentDescription = "截圖", tint = Color.White)
                         }
                         // 只有手機上的檔案可以剪輯（串流中的記錄器檔案要先下載）
-                        if (isLocal(current)) {
+                        if (current.isLocal) {
                             IconButton(
                                 onClick = {
                                     // 位置與播放狀態會在離開時記進 PlayerSession，從剪輯頁回來時停在同一段的同一個時間點
@@ -612,9 +610,9 @@ fun PlayerScreen(
                             }
                         }
                         MoreMenu(
-                            canShare = isLocal(current),
-                            canDownload = !isLocal(current) && current.sdPath != null,
-                            canDelete = isDeletable(current),
+                            canShare = current.isLocal,
+                            canDownload = !current.isLocal && current.sdPath != null,
+                            canDelete = current.isDeletable,
                             hasGps = hasGpsFix,
                             onShare = { shareMedia(context, listOf(Uri.parse(current.url)), "video/*") },
                             onDownload = ::downloadCurrent,
@@ -694,7 +692,7 @@ fun PlayerScreen(
             }
             if (buffering) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             pendingDelete?.let { item ->
-                val local = isLocal(item)
+                val local = item.isLocal
                 ConfirmDeleteDialog(
                     title = if (local) "從手機相簿刪除？" else "從記錄器刪除？",
                     onDismiss = { pendingDelete = null },

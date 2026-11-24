@@ -10,12 +10,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import tw.com.recora.BuildConfig
 
 /** 外觀主題。 */
@@ -103,7 +105,7 @@ internal inline fun <reified T : Enum<T>> enumOr(name: String?, default: T): T =
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-class SettingsStore(context: Context, scope: CoroutineScope) {
+class SettingsStore(context: Context, private val scope: CoroutineScope) {
     private val store = context.dataStore
 
     private object Keys {
@@ -149,6 +151,9 @@ class SettingsStore(context: Context, scope: CoroutineScope) {
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         store.edit { prefs -> write(prefs, transform(read(prefs))) }
     }
+
+    /** 不等寫入完成的 [update]（畫面上的開關）：在 App 層級的 scope 寫，離開畫面也會寫完。 */
+    fun launchUpdate(transform: (AppSettings) -> AppSettings): Job = scope.launch { update(transform) }
 
     private fun read(p: Preferences): AppSettings {
         val d = AppSettings()

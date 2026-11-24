@@ -6,7 +6,16 @@ data class PlayItem(
     val title: String,
     /** 記錄器上的 SD 卡路徑（用來從記錄器刪除）；本機來源不知道路徑時為 null。 */
     val sdPath: String? = null,
-)
+) {
+    /** 手機上（相簿）的檔案（content://），不是記錄器上的串流。 */
+    val isLocal: Boolean get() = url.startsWith("content://")
+
+    /** 直接從記錄器串流（http://）：要先取得記錄器的使用權。 */
+    val isStreaming: Boolean get() = url.startsWith("http")
+
+    /** 刪不刪得掉：本機檔一定可以，記錄器上的要知道 SD 卡路徑。 */
+    val isDeletable: Boolean get() = isLocal || sdPath != null
+}
 
 /** 播放清單的順序。各頁的清單都是新到舊排列（同畫面），所以「錄影時間的下一段」不是 index + 1。 */
 object PlayOrder {

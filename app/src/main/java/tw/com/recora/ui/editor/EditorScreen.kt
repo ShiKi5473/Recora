@@ -776,7 +776,7 @@ fun EditorScreen(
                 Column {
                     ExportSettingsFields(
                         settings = settings,
-                        update = { transform -> container.appScope.launch { container.settings.update(transform) } },
+                        update = { transform -> container.settings.launchUpdate(transform) },
                         showMuteDefault = false,
                         qualityBitrate = { q ->
                             val spec = outputSpec(settings)

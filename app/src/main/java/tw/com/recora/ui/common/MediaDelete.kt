@@ -3,7 +3,6 @@ package tw.com.recora.ui.common
 import android.app.Activity
 import android.content.IntentSender
 import android.net.Uri
-import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,14 +16,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.com.recora.AppContainer
+import tw.com.recora.data.DashcamDeleter
 import tw.com.recora.data.PlayItem
-import java.io.IOException
-
-/** 正在播放的這個檔案刪不刪得掉：本機檔一定可以，記錄器上的要知道 SD 卡路徑。 */
-fun isDeletable(item: PlayItem): Boolean = isLocal(item) || item.sdPath != null
-
-/** 本機（相簿）檔案，不是記錄器上的串流。 */
-fun isLocal(item: PlayItem): Boolean = item.url.startsWith("content://")
 
 /**
  * 播放器的刪除：本機檔（content://）從手機相簿刪除，記錄器上的（http://）送 action=del。
@@ -79,34 +72,26 @@ private sealed interface Outcome {
 }
 
 private suspend fun delete(container: AppContainer, item: PlayItem): Outcome =
-    if (isLocal(item)) deleteLocal(container, item) else deleteOnDashcam(container, item)
+    if (item.isLocal) deleteLocal(container, item) else deleteOnDashcam(container, item)
 
 private suspend fun deleteLocal(container: AppContainer, item: PlayItem): Outcome {
-    val uri = Uri.parse(item.url)
-    return try {
-        withContext(Dispatchers.IO) { container.sink.delete(uri) }
-        container.libraryChanged.tryEmit(Unit)
-        Outcome.Done("已從相簿刪除 ${item.title}")
-    } catch (e: SecurityException) {
-        val request = MediaStore.createDeleteRequest(container.app.contentResolver, listOf(uri))
-        Outcome.NeedsConfirm(request.intentSender)
-    }
+    val result = withContext(Dispatchers.IO) { container.sink.deleteOrRequest(listOf(Uri.parse(item.url))) }
+    // 不是本 App 建立的檔案要系統確認
+    result.confirm?.let { return Outcome.NeedsConfirm(it) }
+    container.libraryChanged.tryEmit(Unit)
+    return Outcome.Done("已從相簿刪除 ${item.title}")
 }
 
 private suspend fun deleteOnDashcam(container: AppContainer, item: PlayItem): Outcome {
     val sdPath = item.sdPath ?: return Outcome.Failed("不知道 ${item.title} 在記錄器上的位置")
     if (!container.connection.isConnected) return Outcome.Failed("沒有連線到記錄器")
-    if (container.files.find(sdPath)?.readOnly == true) return Outcome.Failed("${item.title} 是被記錄器鎖定的緊急錄影，無法單獨刪除（要清除只能格式化記憶卡）")
-    return try {
-        val result = container.api.delete(sdPath)
-        if (result.ok) {
-            container.files.forget(listOf(sdPath))
+    return when (val result = container.deleter.delete(sdPath)) {
+        DashcamDeleter.Result.Deleted -> {
             container.dashcamChanged.tryEmit(Unit)
             Outcome.Done("已從記錄器刪除 ${item.title}")
-        } else {
-            Outcome.Failed("刪除失敗：${result.body}")
         }
-    } catch (e: IOException) {
-        Outcome.Failed("刪除失敗：${e.message}")
+        DashcamDeleter.Result.Protected ->
+            Outcome.Failed("${item.title} 是被記錄器鎖定的緊急錄影，無法單獨刪除（要清除只能格式化記憶卡）")
+        is DashcamDeleter.Result.Failed -> Outcome.Failed("刪除失敗：${result.reason}")
     }
 }
