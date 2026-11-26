@@ -270,6 +270,7 @@ fun EditorScreen(
     /** 微調：暫停後把播放位置往前／後移，再用「設為起點／終點」。 */
     fun step(deltaMs: Long) {
         player.pause()
+        player.setSeekParameters(SeekParameters.EXACT)
         val target = (combinedPosition() + deltaMs).coerceIn(0, segments.sumOf { it.durationMs })
         seekCombined(target)
         positionMs = target
@@ -597,7 +598,14 @@ fun EditorScreen(
                         onClick = { range = range.start..positionMs.coerceAtLeast(startMs + MIN_CLIP_MS).coerceAtMost(totalMs).toFloat() },
                         enabled = !exporting && totalMs > 0,
                     ) { Text("設為終點") }
-                    TextButton(onClick = { seekCombined(startMs); player.play() }, enabled = !exporting) { Text("播放範圍") }
+                    TextButton(
+                        onClick = {
+                            player.setSeekParameters(SeekParameters.EXACT)
+                            seekCombined(startMs)
+                            player.play()
+                        },
+                        enabled = !exporting,
+                    ) { Text("播放範圍") }
                 }
                     }
                 }

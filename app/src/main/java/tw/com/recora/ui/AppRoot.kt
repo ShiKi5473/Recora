@@ -103,9 +103,10 @@ fun AppRoot(container: AppContainer) {
     val backStack by nav.currentBackStackEntryAsState()
     val destination = backStack?.destination
     // 只取進行中的數量：下載進度每 300 ms 更新一次 tasks，整個 AppRoot（Scaffold、導覽列）不必跟著重組
+    val initialActive = remember(container) { container.downloads.tasks.value.count { it.isActive } }
     val activeCount by remember(container) {
         container.downloads.tasks.map { tasks -> tasks.count { it.isActive } }.distinctUntilChanged()
-    }.collectAsStateWithLifecycle(initialValue = container.downloads.tasks.value.count { it.isActive })
+    }.collectAsStateWithLifecycle(initialValue = initialActive)
     // 清單交給 PlayQueues，導覽參數只帶編號
     val onPlay: OnPlay = { url, title, queue ->
         nav.navigate(PlayerRoute(url, title, if (queue.isEmpty()) 0L else container.playQueues.put(queue)))

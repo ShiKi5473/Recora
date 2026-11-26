@@ -38,10 +38,11 @@ import java.io.IOException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        val splash = installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val container = (application as RecoraApp).container
+        splash.setKeepOnScreenCondition { !container.settings.isLoaded }
         handleDebugIntent(intent)
         if (intent?.action == AppUpdateNotifier.ACTION_OPEN_UPDATE) {
             AppUpdater.showPromptIfUpdatePending(this)

@@ -1,6 +1,7 @@
 package tw.com.recora.ui.settings
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,7 +20,10 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,6 +38,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +49,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -82,13 +90,20 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
     val settings by container.settings.state.collectAsStateWithLifecycle()
     // 用 App 的 scope 寫入：改完馬上離開這頁也會存到
     val update: SettingsUpdate = { transform -> container.settings.launchUpdate(transform) }
+    var albumDirDirty by remember { mutableStateOf(false) }
+    var mufuWifiDirty by remember { mutableStateOf(false) }
+    var astroWifiDirty by remember { mutableStateOf(false) }
+    val hasUnsavedChanges = albumDirDirty || mufuWifiDirty || astroWifiDirty
+    var confirmDiscard by remember { mutableStateOf(false) }
+    val tryBack = { if (hasUnsavedChanges) confirmDiscard = true else onBack() }
+    BackHandler(enabled = hasUnsavedChanges) { confirmDiscard = true }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("App 設定") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = tryBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
                 },
             )
         },
@@ -116,7 +131,10 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                     onSelect = { m -> update { it.copy(downloadSubfolder = m) } },
                     hint = "在 Movies／Pictures 的 ${settings.albumDir} 底下再分子資料夾，系統相簿裡比較好找；只影響之後的下載",
                 )
-                AlbumDirField(settings.albumDir) { dir -> update { it.copy(albumDir = dir) } }
+                AlbumDirField(
+                    albumDir = settings.albumDir,
+                    onDirtyChange = { albumDirDirty = it },
+                ) { dir -> update { it.copy(albumDir = dir) } }
             }
 
             Section("瀏覽", Icons.Filled.VideoLibrary) {
@@ -189,6 +207,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 WifiFields(
                     ssidPrefix = settings.ssidPrefix,
                     password = settings.wifiPassword,
+                    onDirtyChange = { mufuWifiDirty = it },
                     onSave = { prefix, pwd -> update { it.copy(ssidPrefix = prefix, wifiPassword = pwd) } },
                 )
             }
@@ -197,6 +216,7 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 WifiFields(
                     ssidPrefix = settings.astroSsidPrefix,
                     password = settings.astroWifiPassword,
+                    onDirtyChange = { astroWifiDirty = it },
                     onSave = { prefix, pwd -> update { it.copy(astroSsidPrefix = prefix, astroWifiPassword = pwd) } },
                 )
             }
@@ -205,6 +225,21 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
                 AppUpdateSection(container, settings, update)
             }
         }
+    }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("尚未儲存變更") },
+            text = { Text("資料夾名稱或 Wi-Fi 設定尚未按「儲存」，確定要捨棄修改並離開嗎？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDiscard = false
+                    onBack()
+                }) { Text("捨棄並離開", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("繼續編輯") } },
+        )
     }
 }
 
@@ -405,10 +440,13 @@ private fun formatMbps(bps: Int): String {
 
 /** 存檔資料夾：下載、匯出、截圖存到 Movies／Pictures 底下的哪個資料夾。 */
 @Composable
-private fun AlbumDirField(albumDir: String, onSave: (String) -> Unit) {
+private fun AlbumDirField(albumDir: String, onDirtyChange: (Boolean) -> Unit, onSave: (String) -> Unit) {
     var name by rememberSaveable(albumDir) { mutableStateOf(albumDir) }
     val trimmed = name.trim()
     val valid = LocalLibrary.isValidAlbumDir(trimmed)
+    val dirty = name != albumDir
+    LaunchedEffect(dirty) { onDirtyChange(dirty) }
+    DisposableEffect(Unit) { onDispose { onDirtyChange(false) } }
     Text("存檔資料夾")
     Text(
         "下載的影片、剪輯匯出的 MP4 存到 Movies/$albumDir，照片與截圖存到 Pictures/$albumDir。" +
@@ -436,9 +474,18 @@ private fun AlbumDirField(albumDir: String, onSave: (String) -> Unit) {
 }
 
 @Composable
-private fun WifiFields(ssidPrefix: String, password: String, onSave: (String, String) -> Unit) {
+private fun WifiFields(
+    ssidPrefix: String,
+    password: String,
+    onDirtyChange: (Boolean) -> Unit,
+    onSave: (String, String) -> Unit,
+) {
     var prefix by rememberSaveable(ssidPrefix) { mutableStateOf(ssidPrefix) }
     var pwd by rememberSaveable(password) { mutableStateOf(password) }
+    var showPassword by rememberSaveable { mutableStateOf(false) }
+    val dirty = prefix != ssidPrefix || pwd != password
+    LaunchedEffect(dirty) { onDirtyChange(dirty) }
+    DisposableEffect(Unit) { onDispose { onDirtyChange(false) } }
     Text(
         "這裡只是 App 按「連線」時用的 SSID 開頭與密碼，不會改到記錄器本身。" +
             "記錄器的密碼請用官方 App 修改，改完再回來這裡更新。",
@@ -465,6 +512,15 @@ private fun WifiFields(ssidPrefix: String, password: String, onSave: (String, St
         onValueChange = { pwd = it },
         label = { Text("密碼") },
         singleLine = true,
+        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { showPassword = !showPassword }) {
+                Icon(
+                    imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (showPassword) "隱藏密碼" else "顯示密碼",
+                )
+            }
+        },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         modifier = Modifier.fillMaxWidth(),
     )

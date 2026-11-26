@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import tw.com.recora.BuildConfig
@@ -155,7 +156,11 @@ class SettingsStore(context: Context, private val scope: CoroutineScope) {
         val skippedAppVersion = stringPreferencesKey("skipped_app_version")
     }
 
-    val flow: Flow<AppSettings> = store.data.map(::read)
+    @Volatile
+    var isLoaded: Boolean = false
+        private set
+
+    val flow: Flow<AppSettings> = store.data.map(::read).onEach { isLoaded = true }
 
     val state: StateFlow<AppSettings> = flow.stateIn(scope, SharingStarted.Eagerly, AppSettings())
 

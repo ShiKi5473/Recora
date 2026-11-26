@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -161,9 +162,14 @@ fun LibraryScreen(
     // 讀取權限：沒有的話只看得到本 App 建立的檔案
     fun fullAccess() = listOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
         .all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+    fun partialAccess() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+        !fullAccess() &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
     var hasFullAccess by remember { mutableStateOf(fullAccess()) }
+    var hasPartialAccess by remember { mutableStateOf(partialAccess()) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         hasFullAccess = fullAccess()
+        hasPartialAccess = partialAccess()
         vm.refresh()
     }
     val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
@@ -171,7 +177,7 @@ fun LibraryScreen(
         container.libraryChanged.tryEmit(Unit)
     }
     LaunchedEffect(Unit) {
-        if (!hasFullAccess && !vm.askedPermission) {
+        if (!hasFullAccess && !hasPartialAccess && !vm.askedPermission) {
             vm.askedPermission = true
             permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES))
         }
@@ -181,9 +187,9 @@ fun LibraryScreen(
         vm.deleteRequests.collect { deleteLauncher.launch(IntentSenderRequest.Builder(it).build()) }
     }
     // 回到這個分頁時重新整理（例如在別的 App 刪了檔案）
-    LifecycleResumeEffect(Unit) {
-        vm.refresh()
-        onPauseOrDispose { }
+    LifecycleResumeEffect(vm) {
+        vm.setVisible(true)
+        onPauseOrDispose { vm.setVisible(false) }
     }
     BackHandler(enabled = selectionMode, onBack = vm::clearSelection)
 
@@ -318,7 +324,11 @@ fun LibraryScreen(
                     Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(20.dp))
                         Text(
-                            "未允許存取相片和影片：只顯示本 App 建立的檔案",
+                            if (hasPartialAccess) {
+                                "目前僅允許存取部分相片和影片：只顯示本 App 建立與已選取的檔案"
+                            } else {
+                                "未允許存取相片和影片：只顯示本 App 建立的檔案"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f).padding(start = 8.dp, top = 12.dp, bottom = 12.dp),
                         )
@@ -326,7 +336,7 @@ fun LibraryScreen(
                             permissionLauncher.launch(
                                 arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES),
                             )
-                        }) { Text("允許") }
+                        }) { Text(if (hasPartialAccess) "管理選取" else "允許") }
                     }
                 }
             }

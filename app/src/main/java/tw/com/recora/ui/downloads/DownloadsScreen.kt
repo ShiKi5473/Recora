@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,6 +41,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -51,6 +55,7 @@ import tw.com.recora.download.TaskStatus
 import tw.com.recora.ui.OnPlay
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.MessagePane
+import tw.com.recora.ui.common.PhotoDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,6 +71,7 @@ fun DownloadsScreen(
     val anyFinished = tasks.any { !it.isActive }
     val anyFailed = tasks.any { it.status == TaskStatus.Failed || it.status == TaskStatus.Cancelled }
     val progress = QueueProgress.of(tasks)
+    var viewingPhoto by remember { mutableStateOf<DownloadTask?>(null) }
 
     Scaffold(
         topBar = {
@@ -100,18 +106,32 @@ fun DownloadsScreen(
                         onRetry = { repo.retry(task.id) },
                         onPlay = {
                             task.resultUri?.let { uri ->
-                                val queue = tasks
-                                    .filter { it.status == TaskStatus.Done && !it.file.isImage && it.resultUri != null }
-                                    .map { PlayItem(it.resultUri.toString(), it.file.name) }
-                                onPlay(uri.toString(), task.file.name, queue)
+                                if (task.file.isImage) {
+                                    viewingPhoto = task
+                                } else {
+                                    val queue = tasks
+                                        .filter { it.status == TaskStatus.Done && !it.file.isImage && it.resultUri != null }
+                                        .map { PlayItem(it.resultUri!!, it.file.name) }
+                                    onPlay(uri, task.file.name, queue)
+                                }
                             }
                         },
-                        onEdit = { task.resultUri?.let { onEdit(it.toString(), task.file.name) } },
+                        onEdit = { task.resultUri?.let { onEdit(it, task.file.name) } },
                     )
                     HorizontalDivider(Modifier.padding(start = 72.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
+    }
+
+    viewingPhoto?.let { photo ->
+        val donePhotos = tasks.filter { it.status == TaskStatus.Done && it.file.isImage && it.resultUri != null }
+        PhotoDialog(
+            container = container,
+            photos = donePhotos.map { PlayItem(it.resultUri!!, it.file.name) },
+            startIndex = donePhotos.indexOfFirst { it.id == photo.id },
+            onDismiss = { viewingPhoto = null },
+        )
     }
 }
 
@@ -184,10 +204,14 @@ private fun TaskRow(
                 TaskStatus.Failed, TaskStatus.Cancelled -> IconButton(onClick = onRetry) {
                     Icon(Icons.Filled.Refresh, contentDescription = "重試")
                 }
-                TaskStatus.Done -> if (!task.file.isImage && task.resultUri != null) {
-                    Row {
-                        IconButton(onClick = onEdit) { Icon(Icons.Filled.ContentCut, contentDescription = "剪輯") }
-                        IconButton(onClick = onPlay) { Icon(Icons.Filled.PlayArrow, contentDescription = "播放") }
+                TaskStatus.Done -> if (task.resultUri != null) {
+                    if (task.file.isImage) {
+                        IconButton(onClick = onPlay) { Icon(Icons.Filled.Visibility, contentDescription = "檢視照片") }
+                    } else {
+                        Row {
+                            IconButton(onClick = onEdit) { Icon(Icons.Filled.ContentCut, contentDescription = "剪輯") }
+                            IconButton(onClick = onPlay) { Icon(Icons.Filled.PlayArrow, contentDescription = "播放") }
+                        }
                     }
                 }
                 TaskStatus.Skipped -> Unit

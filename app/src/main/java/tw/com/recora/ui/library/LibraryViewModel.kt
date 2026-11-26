@@ -9,12 +9,14 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -79,6 +81,8 @@ class LibraryViewModel(
     val deleteRequests: Flow<IntentSender> = _deleteRequests.receiveAsFlow()
 
     private var refreshJob: Job? = null
+    private var visible = false
+    private var dirty = true
 
     /**
      * 這次 App 執行已經自動要求過讀取相片和影片的權限：只自動要求一次。
@@ -87,16 +91,26 @@ class LibraryViewModel(
     var askedPermission = false
 
     init {
-        viewModelScope.launch { libraryChanged.collect { refresh() } }
-        // 「相簿資料夾」改了
+        viewModelScope.launch { libraryChanged.collect { onExternalChange() } }
+        // 「相簿資料夾」或「存檔資料夾」改了
         viewModelScope.launch {
-            settings.state.map { it.libraryFolders }.distinctUntilChanged().drop(1).collect { refresh() }
+            settings.state.distinctUntilChangedBy { it.libraryFolders to it.albumDir }.drop(1).collect { onExternalChange() }
         }
         viewModelScope.launch {
             downloads.tasks.map { tasks -> tasks.count { it.status == TaskStatus.Done } }
                 .distinctUntilChanged()
-                .collect { refresh() }
+                .drop(1)
+                .collect { onExternalChange() }
         }
+    }
+
+    fun setVisible(value: Boolean) {
+        visible = value
+        if (value && dirty) refresh() else if (!value) dirty = true
+    }
+
+    private fun onExternalChange() {
+        if (visible) refresh(debounceMs = REFRESH_DEBOUNCE_MS) else dirty = true
     }
 
     fun selectTab(kind: MediaKind) = _ui.update { it.copy(tab = kind, selection = emptySet()) }
@@ -117,14 +131,16 @@ class LibraryViewModel(
     fun selectRange(orderedUris: List<String>) = _ui.update { it.copy(selection = DateGroups.selectRange(orderedUris, it.selection)) }
 
     /** 重讀相簿。回到畫面、下載完成、相簿內容變了常常連續觸發：只留最後一次，舊的結果不會蓋掉新的。 */
-    fun refresh() {
+    fun refresh(debounceMs: Long = 0L) {
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
+            if (debounceMs > 0L) delay(debounceMs)
             _ui.update { it.copy(loading = true) }
             try {
                 val items = withContext(Dispatchers.IO) {
                     runCatching { LocalLibrary.sorted(sink.listLibrary()) }.getOrDefault(emptyList())
                 }
+                dirty = false
                 // 已經不在相簿裡的檔案（例如被刪掉）從選取中移除
                 val present = items.mapTo(HashSet()) { it.uri }
                 _ui.update { u -> u.copy(items = items, selection = u.selection.filterTo(HashSet()) { it in present }) }
@@ -173,6 +189,8 @@ class LibraryViewModel(
     }
 
     companion object {
+        private const val REFRESH_DEBOUNCE_MS = 250L
+
         fun factory(c: AppContainer) = viewModelFactory {
             initializer { LibraryViewModel(settings = c.settings, downloads = c.downloads, sink = c.sink, libraryChanged = c.libraryChanged) }
         }

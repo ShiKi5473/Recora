@@ -65,7 +65,7 @@ private val OverlayAccent = DarkScheme.primary
 @Composable
 fun PlayerControls(
     isPlaying: Boolean,
-    positionMs: Long,
+    positionMs: () -> Long,
     durationMs: Long,
     hasPrevious: Boolean,
     hasNext: Boolean,
@@ -91,7 +91,8 @@ fun PlayerControls(
     DisposableEffect(Unit) { onDispose { onTopChanged(Float.MAX_VALUE) } }
     var scrub by remember { mutableStateOf<Float?>(null) }
     val duration = durationMs.coerceAtLeast(0L)
-    val shown = scrub?.toLong() ?: positionMs.coerceIn(0L, duration.coerceAtLeast(positionMs))
+    val currentPositionMs = positionMs()
+    val shown = scrub?.toLong() ?: currentPositionMs.coerceIn(0L, duration.coerceAtLeast(currentPositionMs))
     Column(
         modifier
             .fillMaxWidth()

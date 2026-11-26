@@ -120,9 +120,23 @@ private fun MapTilesOverCellular(enabled: Boolean) {
     DisposableEffect(enabled) {
         if (!enabled) return@DisposableEffect onDispose {}
         val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val lock = Any()
+        var activeClient: OkHttpClient? = null
+        fun replaceClient(next: OkHttpClient?) {
+            val prev = synchronized(lock) {
+                val old = activeClient
+                activeClient = next
+                HttpRequestUtil.setOkHttpClient(next)
+                old
+            }
+            prev?.let {
+                it.dispatcher.executorService.shutdown()
+                it.connectionPool.evictAll()
+            }
+        }
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                HttpRequestUtil.setOkHttpClient(
+                replaceClient(
                     OkHttpClient.Builder()
                         .socketFactory(network.socketFactory)
                         .dns(object : Dns {
@@ -132,7 +146,7 @@ private fun MapTilesOverCellular(enabled: Boolean) {
                 )
             }
 
-            override fun onLost(network: Network) = HttpRequestUtil.setOkHttpClient(null)
+            override fun onLost(network: Network) = replaceClient(null)
         }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -141,7 +155,7 @@ private fun MapTilesOverCellular(enabled: Boolean) {
         val registered = runCatching { cm.requestNetwork(request, callback) }.isSuccess
         onDispose {
             if (registered) runCatching { cm.unregisterNetworkCallback(callback) }
-            HttpRequestUtil.setOkHttpClient(null) // null = MapLibre 預設的連線
+            replaceClient(null) // null = MapLibre 預設的連線
         }
     }
 }

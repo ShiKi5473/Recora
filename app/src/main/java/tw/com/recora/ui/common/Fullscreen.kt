@@ -3,13 +3,14 @@ package tw.com.recora.ui.common
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
+
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -25,7 +26,7 @@ object Immersive {
  */
 @Composable
 fun FullscreenEffect(fullscreen: Boolean, onExit: () -> Unit) {
-    val activity = LocalContext.current as? Activity
+    val activity = LocalActivity.current
     LaunchedEffect(fullscreen) {
         activity?.applyFullscreen(fullscreen)
         Immersive.active = fullscreen
@@ -60,7 +61,7 @@ private fun Activity.applyFullscreen(on: Boolean) {
  */
 @Composable
 fun LightSystemBarIcons() {
-    val activity = LocalContext.current as? Activity ?: return
+    val activity = LocalActivity.current ?: return
     DisposableEffect(Unit) {
         val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
         val statusBefore = controller.isAppearanceLightStatusBars

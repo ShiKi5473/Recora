@@ -8,11 +8,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -109,10 +112,11 @@ class BrowserViewModel(
             downloads.tasks
                 .map { tasks -> tasks.count { it.status == TaskStatus.Done } }
                 .distinctUntilChanged()
-                .collect { refreshDownloaded() }
+                .drop(1)
+                .collect { onDownloadedChanged() }
         }
         // 手機上的檔案被刪掉（相簿、播放器）：打勾與「選取已下載的」要跟著更新
-        viewModelScope.launch { libraryChanged.collect { refreshDownloaded() } }
+        viewModelScope.launch { libraryChanged.collect { onDownloadedChanged() } }
         // 在播放器刪掉記錄器上的檔案、或格式化記憶卡後，列表要跟著更新（快取已由對方更新）
         viewModelScope.launch {
             dashcamChanged.collect { if (connection.isConnected && mayLoadInBackground()) load() }
@@ -122,16 +126,28 @@ class BrowserViewModel(
     /** 「檔案」頁現在看得到（回到前景、停在這個分頁）。 */
     private var visible = false
 
+    /** 離開「檔案」頁期間有下載完成或相簿異動，回到這一頁時補重讀 MediaStore。 */
+    private var downloadedDirty = true
+
     /**
      * 沒在看這一頁時要不要讀列表：Astro 讀列表要先停錄，只有在看檔案時才讀（「檔案」頁拿著停錄的租約）；
      * MUFU 連線時本來就不錄影，連上就先讀進快取。
      */
     private fun mayLoadInBackground(): Boolean = visible || !api().listingStopsRecording
 
-    /** 「檔案」頁出現或離開；出現時（已連線、還沒有這個資料夾的列表）補讀。 */
+    /** 「檔案」頁出現或離開；出現時（已連線、還沒有這個資料夾的列表）補讀，並處理離開期間的已下載異動。 */
     fun setVisible(value: Boolean) {
         visible = value
-        if (value && connection.isConnected && !_ui.value.loading) load()
+        if (value) {
+            if (downloadedDirty) refreshDownloaded()
+            if (connection.isConnected && !_ui.value.loading) load()
+        } else {
+            downloadedDirty = true
+        }
+    }
+
+    private fun onDownloadedChanged() {
+        if (visible) refreshDownloaded(debounceMs = DOWNLOADED_DEBOUNCE_MS) else downloadedDirty = true
     }
 
     fun selectFolder(folder: Folder) {
@@ -148,8 +164,15 @@ class BrowserViewModel(
         loadJob = viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             try {
-                files.list(folder, refresh).collect { files ->
-                    _ui.update { it.copy(clips = Clips.group(files)) }
+                var lastEmitNs = 0L
+                files.list(folder, refresh).conflate().collect { list ->
+                    if (lastEmitNs > 0L) {
+                        val elapsedMs = (System.nanoTime() - lastEmitNs) / 1_000_000L
+                        if (elapsedMs < GROUP_THROTTLE_MS) delay(GROUP_THROTTLE_MS - elapsedMs)
+                    }
+                    val grouped = withContext(Dispatchers.Default) { Clips.group(list) }
+                    lastEmitNs = System.nanoTime()
+                    _ui.update { it.copy(clips = grouped) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -263,19 +286,26 @@ class BrowserViewModel(
     fun thumbnailUrl(file: DashcamFile): String = api().httpUrl(file.sdPath)
 
     /** 重讀手機上已下載的檔案（打勾、「未下載」篩選、「選取已下載的」都靠它）；連續觸發時只留最後一次。 */
-    fun refreshDownloaded() {
+    fun refreshDownloaded(debounceMs: Long = 0L) {
         downloadedJob?.cancel()
-        downloadedJob = viewModelScope.launch { loadDownloaded() }
+        downloadedJob = viewModelScope.launch {
+            if (debounceMs > 0L) delay(debounceMs)
+            loadDownloaded()
+        }
     }
 
     private suspend fun loadDownloaded(): Map<String, Long> {
         val entries = withContext(Dispatchers.IO) { runCatching { sink.downloadedEntries() }.getOrDefault(emptyMap()) }
         val map = entries.mapValues { it.value.size }
+        downloadedDirty = false
         _ui.update { it.copy(downloaded = map, localUris = entries.mapValues { e -> e.value.uri.toString() }) }
         return map
     }
 
     companion object {
+        private const val GROUP_THROTTLE_MS = 150L
+        private const val DOWNLOADED_DEBOUNCE_MS = 250L
+
         fun factory(c: AppContainer) = viewModelFactory {
             initializer {
                 BrowserViewModel(

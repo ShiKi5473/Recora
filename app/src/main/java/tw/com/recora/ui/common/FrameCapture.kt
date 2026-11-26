@@ -45,8 +45,14 @@ fun captureFrame(
     fun save(frame: Bitmap) = scope.launch {
         val message = try {
             withContext(Dispatchers.IO) {
-                val bitmap = crop?.let { frame.cropTo(it) } ?: frame
-                container.sink.saveJpeg(bitmap, name)
+                var cropped: Bitmap? = null
+                try {
+                    val bitmap = crop?.let { frame.cropTo(it).also { b -> cropped = b } } ?: frame
+                    container.sink.saveJpeg(bitmap, name)
+                } finally {
+                    cropped?.takeIf { it !== frame }?.recycle()
+                    frame.recycle()
+                }
             }
             container.libraryChanged.tryEmit(Unit)
             "已存${if (crop != null) "放大範圍的" else ""}截圖 $name 到 Pictures/${container.settings.state.value.albumDir}"
@@ -61,7 +67,12 @@ fun captureFrame(
         is SurfaceView -> {
             val bitmap = Bitmap.createBitmap(video.width, video.height, Bitmap.Config.ARGB_8888)
             PixelCopy.request(surface, bitmap, { result ->
-                if (result == PixelCopy.SUCCESS) save(bitmap) else onMessage("截圖失敗（$result）")
+                if (result == PixelCopy.SUCCESS) {
+                    save(bitmap)
+                } else {
+                    bitmap.recycle()
+                    onMessage("截圖失敗（$result）")
+                }
             }, Handler(Looper.getMainLooper()))
         }
         else -> onMessage("畫面還沒準備好")

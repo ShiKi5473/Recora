@@ -1,5 +1,6 @@
 package tw.com.recora.ui.browser
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -111,26 +112,23 @@ fun BrowserScreen(container: AppContainer, onPlay: OnPlay) {
     var viewingPhoto by remember { mutableStateOf<DashcamFile?>(null) }
 
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(it) } }
-    // 回到這個分頁時重讀手機上的檔案（例如在別的 App 刪了已下載的影片），打勾才不會過期
+    // 回到這個分頁時通知 ViewModel 檢查是否需要重讀已下載狀態；離開時標記 dirty
     LifecycleResumeEffect(vm) {
-        vm.refreshDownloaded()
-        onPauseOrDispose { }
+        vm.setVisible(true)
+        onPauseOrDispose { vm.setVisible(false) }
     }
     // Astro：「檔案」頁可見時維持停錄＋檔案模式，離開約 10 秒後自動恢復錄影（MUFU 沒有動作）
     val connectedNow = conn is ConnState.Connected
     LifecycleResumeEffect(connectedNow) {
         val lease = if (connectedNow) container.api.holdFiles("檔案頁") else Lease.NONE
-        vm.setVisible(true)
-        onPauseOrDispose {
-            vm.setVisible(false)
-            lease.close()
-        }
+        onPauseOrDispose { lease.close() }
     }
 
     // 畫面上的片段（套用「未下載」篩選），依日期分組
     val clips = remember(ui.clips, ui.onlyMissing, ui.downloaded, settings.includeRear) { ui.visibleClips(settings.includeRear) }
     val byDate = remember(clips) { clips.groupBy { it.date } }
     val selectionMode = ui.selection.isNotEmpty()
+    BackHandler(enabled = selectionMode, onBack = vm::clearSelection)
     val play: (DashcamFile) -> Unit = { file ->
         if (file.isImage) {
             viewingPhoto = file
@@ -155,6 +153,7 @@ fun BrowserScreen(container: AppContainer, onPlay: OnPlay) {
                     count = ui.selection.size,
                     includeRearDefault = settings.includeRear,
                     onClose = vm::clearSelection,
+                    onSelectAll = { vm.selectAll(clips.map { it.key }) },
                     onSelectRange = { vm.selectRange(clips.map { it.key }) },
                     onDownload = { choice -> vm.download(vm.selectedClips(), choice) },
                     onDelete = { pendingDelete = vm.selectedClips() },
@@ -294,6 +293,7 @@ private fun SelectionBar(
     count: Int,
     includeRearDefault: Boolean,
     onClose: () -> Unit,
+    onSelectAll: () -> Unit,
     onSelectRange: () -> Unit,
     onDownload: (DownloadChoice) -> Unit,
     onDelete: () -> Unit,
@@ -302,6 +302,7 @@ private fun SelectionBar(
     SelectionTopBar(title = "已選 $count 段", onClose = onClose) {
         // 選了頭尾兩段後，把中間的全部選起來
         if (count >= 2) TextButton(onClick = onSelectRange) { Text("選取範圍") }
+        IconButton(onClick = onSelectAll) { Icon(Icons.Filled.SelectAll, contentDescription = "全選") }
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Filled.Download, contentDescription = "下載") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

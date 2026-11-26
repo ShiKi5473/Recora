@@ -125,6 +125,7 @@ suspend fun probeDurationMs(context: Context, client: OkHttpClient, uri: String,
  * 把播放錯誤翻成看得懂的原因，同時把錯誤碼和底層例外寫進診斷紀錄（「裝置」頁看得到）。
  * [streaming] = 正在從記錄器串流（而不是播手機上的檔案）。
  */
+@androidx.annotation.OptIn(UnstableApi::class)
 fun playbackErrorMessage(e: PlaybackException, streaming: Boolean): String {
     val cause = e.cause?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "無"
     DiagLog.log("播放失敗 ${e.errorCodeName}(${e.errorCode})，來源=${if (streaming) "記錄器" else "手機"}，底層：$cause")

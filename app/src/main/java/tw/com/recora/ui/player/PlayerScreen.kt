@@ -65,6 +65,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -189,6 +190,8 @@ fun PlayerScreen(
     }
     var isPlaying by remember { mutableStateOf(session.resumePlaying) }
     var controlsVisible by remember { mutableStateOf(true) }
+    val positionState = remember { mutableLongStateOf(session.resumePositionMs) }
+    val positionSec by remember { derivedStateOf { positionState.longValue / 1000L } }
     var durationMs by remember { mutableLongStateOf(0L) }
     var buffering by remember { mutableStateOf(false) }
     /** 底部控制列頂端的 Y（沒顯示時是最大值）：左右滑動、縮放平移的手勢不從這裡以下開始。 */
@@ -268,8 +271,11 @@ fun PlayerScreen(
 
     fun stepFrame(forward: Boolean) {
         player.pause()
+        player.setSeekParameters(SeekParameters.EXACT)
         val frame = (1000f / (player.videoFormat?.frameRate?.takeIf { it > 0 } ?: 30f)).roundToLong()
-        player.seekTo((player.currentPosition + if (forward) frame else -frame).coerceAtLeast(0))
+        val target = (player.currentPosition + if (forward) frame else -frame).coerceAtLeast(0)
+        player.seekTo(target)
+        positionState.longValue = target
     }
 
     fun toggleAutoPlay() {
@@ -325,7 +331,19 @@ fun PlayerScreen(
 
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
+                if (state == Player.STATE_READY || state == Player.STATE_ENDED) {
+                    positionState.longValue = player.currentPosition
+                    durationMs = player.duration.takeIf { it > 0 } ?: 0L
+                }
                 if (state == Player.STATE_ENDED) onEndedState.value()
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                positionState.longValue = player.currentPosition
             }
 
             override fun onPlayerError(e: PlaybackException) {
@@ -364,17 +382,8 @@ fun PlayerScreen(
         }
     }
 
-    // 實際錄影時間 = 這段的開始時間 + 播放位置
-    var positionMs by remember { mutableLongStateOf(0L) }
+    // 實際錄影時間 = 這段的開始時間 + 播放位置（每秒變化時才重算，避免跟著 200ms 進度條整頁重組）
     val showControls = controlsVisible || !isPlaying
-    LaunchedEffect(player, showControls) {
-        while (true) {
-            positionMs = player.currentPosition
-            durationMs = player.duration.takeIf { it > 0 } ?: 0L
-            // 控制列顯示時更新密一點，進度條才順
-            delay(if (showControls) 200 else 500)
-        }
-    }
     // 播放中、控制列顯示 3 秒沒有操作就自動收起；暫停時一直顯示
     LaunchedEffect(controlsVisible, isPlaying, interactions) {
         if (controlsVisible && isPlaying) {
@@ -383,7 +392,7 @@ fun PlayerScreen(
         }
     }
     val startedAt = remember(current.title) { LocalLibrary.recordingStart(current.title) }
-    val recordedAt = startedAt?.plusNanos(positionMs * 1_000_000)
+    val recordedAt = remember(startedAt, positionSec) { startedAt?.plusSeconds(positionSec) }
 
     // 影片裡的 GPS（Astro 的原始檔才有）：換段時從手機上的檔案讀一次；串流中的記錄器檔案不讀。
     // 讀完才換掉（讀檔只要幾 ms）：先清成 null 的話，換段時路線地圖會被拆掉再重建
@@ -395,7 +404,8 @@ fun PlayerScreen(
 
     /** 播放位置那一秒的 GPS（見 [GpsTrack.pointForPosition]）。 */
     fun gpsAt(ms: Long): GpsPoint? = gps?.pointForPosition(ms)
-    val gpsText = if (settings.showGps && gps != null) gpsLabel(gpsAt(positionMs)) else null
+    val currentGps = remember(gps, positionSec) { gps?.pointForPosition(positionSec * 1000L) }
+    val gpsText = if (settings.showGps && gps != null) gpsLabel(currentGps) else null
 
     /** 用地圖 App 開啟目前這一秒的位置（外部 App 不受本 App 綁在記錄器網路上的影響）。 */
     fun openMap() {
@@ -449,12 +459,13 @@ fun PlayerScreen(
         playAt(next)
     }
 
+    var resumeAfterDeleteCancel by remember { mutableStateOf(false) }
     val deleteItem = rememberMediaDeleter(container, toast) { item, deleted ->
         when {
-            // 沒刪成或使用者取消：恢復剛才停掉的播放
+            // 沒刪成或使用者取消：恢復刪除前的播放／暫停狀態
             !deleted -> {
                 player.prepare()
-                player.play()
+                player.playWhenReady = resumeAfterDeleteCancel
             }
             item.title == queue.getOrNull(index)?.title -> dropFromQueue()
             // 刪的是另一個鏡頭的檔案：回到清單裡的那一段
@@ -472,6 +483,17 @@ fun PlayerScreen(
     val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val canShowMap = hasGpsFix && !fullscreen && portrait
     val mapShown = canShowMap && settings.showRouteMap
+    // 只在播放中且畫面看得到進度條或地圖時輪詢播放位置，避免收起控制列時空轉重組
+    LaunchedEffect(player, isPlaying, showControls, mapShown) {
+        positionState.longValue = player.currentPosition
+        durationMs = player.duration.takeIf { it > 0 } ?: 0L
+        if (!isPlaying || (!showControls && !mapShown)) return@LaunchedEffect
+        while (true) {
+            delay(if (showControls) 200 else 1000)
+            positionState.longValue = player.currentPosition
+            durationMs = player.duration.takeIf { it > 0 } ?: 0L
+        }
+    }
     // 地圖在下面時，影片區不留底部系統列的空間（改由地圖留）
     val videoInsets = if (mapShown) WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal) else WindowInsets.safeDrawing
 
@@ -489,8 +511,13 @@ fun PlayerScreen(
                 (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().windowInsetsPadding(videoInsets))
                     // Initial：搶在其他手勢之前處理，捏合時不會順便切換控制列；控制列（進度條）上的拖曳不拿來平移
                     .zoomGestures(zoom, PointerEventPass.Initial) { pos, _ -> pos.y > controlsTopPx }
-                    // 點一下影片顯示或收起控制列
-                    .pointerInput(Unit) { detectTapGestures(onTap = { controlsVisible = !controlsVisible }) },
+                    // 點一下影片顯示或收起控制列、點兩下放大／還原
+                    .pointerInput(zoom) {
+                        detectTapGestures(
+                            onTap = { controlsVisible = !controlsVisible },
+                            onDoubleTap = { zoom.toggle(it) },
+                        )
+                    },
             ) {
                 AndroidView(
                     factory = { ctx ->
@@ -562,7 +589,7 @@ fun PlayerScreen(
                             gpsText?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall) }
                             if (queue.size > 1) {
                                 Text(
-                                    "${index + 1} / ${queue.size}　滑動切換・雙指放大",
+                                    "${index + 1} / ${queue.size}　滑動切換・雙指或點兩下放大",
                                     color = Color.White.copy(alpha = 0.7f),
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
@@ -617,7 +644,7 @@ fun PlayerScreen(
             ) {
                 PlayerControls(
                     isPlaying = isPlaying,
-                    positionMs = positionMs,
+                    positionMs = { positionState.longValue },
                     durationMs = durationMs,
                     hasPrevious = previousIndex != null,
                     hasNext = nextIndex != null,
@@ -654,7 +681,7 @@ fun PlayerScreen(
                     onSeekFinished = { ms ->
                         player.setSeekParameters(SeekParameters.EXACT)
                         player.seekTo(ms)
-                        positionMs = ms
+                        positionState.longValue = ms
                     },
                     onStepFrame = { forward -> interactions++; stepFrame(forward) },
                     onSwitchCamera = { interactions++; switchCamera() },
@@ -675,6 +702,7 @@ fun PlayerScreen(
                         pendingDelete = null
                         // 記錄器的 HTTP 伺服器一次只服務一個連線：先停播放，del 的 CGI 才連得上。
                         // 本機檔也先停，免得檔案在播放中被刪掉而跳出播放錯誤。
+                        resumeAfterDeleteCancel = player.playWhenReady
                         player.stop()
                         deleteItem(item)
                     },
@@ -692,12 +720,13 @@ fun PlayerScreen(
         if (mapShown && track != null) {
             RouteMap(
                 track = track,
-                current = gpsAt(positionMs),
+                current = currentGps,
                 dashcamBound = dashcamBound,
                 onSeek = { ms ->
                     interactions++
+                    player.setSeekParameters(SeekParameters.EXACT)
                     player.seekTo(ms)
-                    positionMs = ms
+                    positionState.longValue = ms
                 },
                 modifier = Modifier.fillMaxWidth().weight(0.8f)
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)),
