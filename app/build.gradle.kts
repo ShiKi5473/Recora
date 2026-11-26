@@ -34,6 +34,10 @@ android {
         buildConfigField("String", "GITHUB_REPO", "\"$githubRepo\"")
     }
 
+    androidResources {
+        localeFilters += listOf("zh-rTW", "zh-rHK", "en")
+    }
+
     signingConfigs {
         getByName("debug") {
             // CI（push / PR）沒有專案專用 keystore 時退回 AGP 預設 debug keystore，避免 assembleDebug 失敗

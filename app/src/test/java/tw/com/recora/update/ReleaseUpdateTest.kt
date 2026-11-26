@@ -1,12 +1,31 @@
 package tw.com.recora.update
 
+import android.content.Context
+import android.content.ContextWrapper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.util.concurrent.TimeUnit
 
 class ReleaseUpdateTest {
+
+    @get:Rule
+    val tmp = TemporaryFolder()
 
     @Test
     fun semverParsingAndComparison() {
@@ -147,5 +166,71 @@ class ReleaseUpdateTest {
 
         assertEquals(h1, ReleasePicker.parseChecksumText("$h1\n", "Recora-v1.0.1.apk"))
         assertNull(ReleasePicker.parseChecksumText("$h1  other.apk", "Recora-v1.0.1.apk"))
+    }
+
+    @Test
+    fun cancelDownloadCancelsBackgroundAutoUpdateAndCleansTempFile() = runBlocking {
+        val server = MockWebServer()
+        val payload = ByteArray(128 * 1024) { 0x5A }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path?.endsWith("/latest") == true -> MockResponse().setBody(
+                    """
+                    {
+                      "tag_name": "v99.0.0",
+                      "name": "Recora v99.0.0",
+                      "assets": [
+                        {
+                          "name": "Recora-v99.0.0.apk",
+                          "size": ${payload.size},
+                          "browser_download_url": "${server.url("/Recora-v99.0.0.apk")}"
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                )
+                else -> MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Length", payload.size.toString())
+                    .setBody(Buffer().write(payload))
+                    .throttleBody(1024, 200, TimeUnit.MILLISECONDS)
+            }
+        }
+        server.start()
+        val origUrl = AppUpdater.releaseApiUrl
+        val origCleartext = AppUpdater.allowCleartextForTest
+        val testContext = object : ContextWrapper(null) {
+            override fun getApplicationContext(): Context = this
+            override fun getCacheDir(): File = tmp.root
+            override fun getPackageName(): String = "tw.com.recora"
+            override fun getSystemService(name: String): Any? = null
+        }
+        try {
+            AppUpdater.releaseApiUrl = server.url("/latest").toString()
+            AppUpdater.allowCleartextForTest = true
+
+            val job = async(Dispatchers.IO) {
+                AppUpdater.runAutoCheckAndUpdate(testContext, skippedVersion = "")
+            }
+
+            withTimeout(5_000) {
+                while (AppUpdater.state.value !is AppUpdateState.Downloading) delay(20)
+            }
+
+            AppUpdater.cancelDownload(testContext)
+            withTimeout(5_000) {
+                runCatching { job.await() }
+            }
+
+            assertTrue(job.isCancelled)
+            val st = AppUpdater.state.value
+            assertTrue("預期狀態為 Available，實際為 $st", st is AppUpdateState.Available)
+            assertFalse(File(File(tmp.root, "updates"), "download.apk.tmp").exists())
+        } finally {
+            AppUpdater.releaseApiUrl = origUrl
+            AppUpdater.allowCleartextForTest = origCleartext
+            AppUpdater.cancelDownload(testContext)
+            server.shutdown()
+        }
     }
 }

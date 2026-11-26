@@ -92,6 +92,12 @@ object AppUpdater {
     private const val DASHCAM_NETWORK_MESSAGE = "目前連線至行車記錄器 Wi-Fi（無網際網路），請先中斷記錄器連線再進行更新"
     private val USER_AGENT = "Recora/${BuildConfig.VERSION_NAME} (Android)"
 
+    @Volatile
+    internal var releaseApiUrl: String = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest"
+
+    @Volatile
+    internal var allowCleartextForTest: Boolean = false
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
     val state: StateFlow<AppUpdateState> = _state.asStateFlow()
@@ -118,9 +124,13 @@ object AppUpdater {
     fun checkManual(context: Context) {
         val cur = _state.value
         if (cur.isBusy) return
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
         activeJob = scope.launch {
-            runCheck(appContext, manual = true, skippedVersion = "")
+            try {
+                runCheck(appContext, manual = true, skippedVersion = "")
+            } finally {
+                if (activeJob === coroutineContext[Job]) activeJob = null
+            }
         }
     }
 
@@ -129,12 +139,18 @@ object AppUpdater {
      * is active, if the latest version was skipped by the user, or if no update exists.
      */
     suspend fun runAutoCheckAndUpdate(context: Context, skippedVersion: String): Boolean {
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
         val cur = _state.value
         if (cur.isBusy || cur is AppUpdateState.ReadyToInstall || cur is AppUpdateState.PendingUserAction) {
             return true
         }
-        return runCheck(appContext, manual = false, skippedVersion = skippedVersion)
+        val job = currentCoroutineContext()[Job]
+        activeJob = job
+        return try {
+            runCheck(appContext, manual = false, skippedVersion = skippedVersion)
+        } finally {
+            if (activeJob === job) activeJob = null
+        }
     }
 
     fun startDownloadAndInstall(context: Context, release: AvailableUpdate, showPrompt: Boolean = true) {
@@ -142,15 +158,19 @@ object AppUpdater {
         if (cur is AppUpdateState.Downloading || cur is AppUpdateState.Verifying || cur is AppUpdateState.Installing) {
             return
         }
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
         activeJob?.cancel()
         activeJob = scope.launch {
-            downloadVerifyAndInstall(appContext, release, showPrompt = showPrompt)
+            try {
+                downloadVerifyAndInstall(appContext, release, showPrompt = showPrompt)
+            } finally {
+                if (activeJob === coroutineContext[Job]) activeJob = null
+            }
         }
     }
 
     fun installDownloaded(context: Context, release: AvailableUpdate, apkFile: File, showPrompt: Boolean = true) {
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
         scope.launch {
             proceedToInstall(appContext, release, apkFile, showPrompt = showPrompt)
         }
@@ -159,7 +179,7 @@ object AppUpdater {
     fun cancelDownload(context: Context) {
         activeJob?.cancel()
         activeJob = null
-        File(updatesDir(context.applicationContext), TMP_APK).delete()
+        File(updatesDir(context.applicationContext ?: context), TMP_APK).delete()
         val cur = _state.value
         val rel = when (cur) {
             is AppUpdateState.Downloading -> cur.release
@@ -183,7 +203,7 @@ object AppUpdater {
     }
 
     fun showPromptIfUpdatePending(context: Context) {
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
         when (val cur = _state.value) {
             is AppUpdateState.Available -> _state.value = cur.copy(showPrompt = true)
             is AppUpdateState.Downloading -> _state.value = cur.copy(showPrompt = true)
@@ -222,7 +242,7 @@ object AppUpdater {
      * or when active dashcam downloads finish while a verified APK is waiting.
      */
     fun resumePendingInstallIfReady(context: Context) {
-        val appContext = context.applicationContext
+        val appContext = context.applicationContext ?: context
         val cur = _state.value
         if (cur is AppUpdateState.ReadyToInstall) {
             if (isTransferActive(appContext)) return
@@ -292,7 +312,7 @@ object AppUpdater {
 
     /** Deletes cached `.tmp` and outdated `.apk` files at app startup. */
     fun cleanupStaleFiles(context: Context) {
-        val dir = updatesDir(context.applicationContext)
+        val dir = updatesDir(context.applicationContext ?: context)
         if (!dir.isDirectory) return
         val currentVersion = AppVersion.parse(BuildConfig.VERSION_NAME)
         dir.listFiles().orEmpty().forEach { f ->
@@ -312,7 +332,7 @@ object AppUpdater {
 
     /** Deletes everything in the updates cache directory; returns true if any file existed. */
     fun cleanupUpdateCache(context: Context): Boolean {
-        val dir = updatesDir(context.applicationContext)
+        val dir = updatesDir(context.applicationContext ?: context)
         val files = dir.listFiles().orEmpty()
         val hadFiles = files.isNotEmpty()
         files.forEach { it.delete() }
@@ -331,8 +351,7 @@ object AppUpdater {
         }
         if (manual) _state.value = AppUpdateState.Checking
         return try {
-            val apiUrl = "https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest"
-            val json = fetchGitHubReleaseJson(apiUrl)
+            val json = fetchGitHubReleaseJson(releaseApiUrl)
             val now = System.currentTimeMillis()
             recordCheckTime(context, now)
 
@@ -349,7 +368,8 @@ object AppUpdater {
             when (val result = ReleasePicker.evaluateLatestRelease(
                 jsonText = json,
                 currentVersionName = BuildConfig.VERSION_NAME,
-                supportedAbis = Build.SUPPORTED_ABIS.toList(),
+                supportedAbis = Build.SUPPORTED_ABIS?.toList().orEmpty(),
+                allowCleartext = allowCleartextForTest,
             )) {
                 ReleaseParseResult.UpToDate -> {
                     _state.value = AppUpdateState.UpToDate(BuildConfig.VERSION_NAME)
@@ -372,6 +392,7 @@ object AppUpdater {
                 }
             }
         } catch (e: CancellationException) {
+            if (_state.value is AppUpdateState.Checking) _state.value = AppUpdateState.Idle
             throw e
         } catch (e: Exception) {
             if (manual) {
@@ -462,6 +483,10 @@ object AppUpdater {
             proceedToInstall(context, release, targetApk, showPrompt = promptNow)
         } catch (e: CancellationException) {
             File(dir, TMP_APK).delete()
+            val cur = _state.value
+            if (cur is AppUpdateState.Downloading || cur is AppUpdateState.Verifying) {
+                _state.value = AppUpdateState.Available(release, showPrompt = false)
+            }
             throw e
         } catch (e: Exception) {
             File(dir, TMP_APK).delete()
@@ -679,7 +704,7 @@ object AppUpdater {
         var current = url
         for (hop in 0..MAX_REDIRECTS) {
             val parsed = URL(current)
-            require(parsed.protocol.equals("https", ignoreCase = true)) { "僅支援 HTTPS 下載連線" }
+            require(allowCleartextForTest || parsed.protocol.equals("https", ignoreCase = true)) { "僅支援 HTTPS 下載連線" }
             val conn = (parsed.openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
                 connectTimeout = 15_000

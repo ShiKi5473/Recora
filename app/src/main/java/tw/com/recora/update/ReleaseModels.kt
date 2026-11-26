@@ -138,6 +138,7 @@ object ReleasePicker {
         jsonText: String,
         currentVersionName: String,
         supportedAbis: List<String> = emptyList(),
+        allowCleartext: Boolean = false,
     ): ReleaseParseResult {
         val release = UpdateJson.decodeFromString(GitHubRelease.serializer(), jsonText)
         if (release.draft || release.prerelease) return ReleaseParseResult.UpToDate
@@ -145,7 +146,7 @@ object ReleasePicker {
 
         val version = AppVersion.parse(release.tagName)?.normalized
             ?: release.tagName.trim().removePrefix("v").removePrefix("V")
-        val apkAsset = selectApkAsset(release.assets, supportedAbis)
+        val apkAsset = selectApkAsset(release.assets, supportedAbis, allowCleartext)
             ?: return ReleaseParseResult.NoApkAsset(version)
 
         val expectedSha = extractSha256FromDigest(apkAsset.digest)
@@ -173,10 +174,15 @@ object ReleasePicker {
     }
 
     /** Picks the best installable HTTPS `.apk` asset, preferring signed release & matching ABI. */
-    fun selectApkAsset(assets: List<GitHubAsset>, supportedAbis: List<String> = emptyList()): GitHubAsset? {
+    fun selectApkAsset(
+        assets: List<GitHubAsset>,
+        supportedAbis: List<String> = emptyList(),
+        allowCleartext: Boolean = false,
+    ): GitHubAsset? {
         val candidates = assets.filter { asset ->
             asset.name.endsWith(".apk", ignoreCase = true) &&
-                asset.downloadUrl.startsWith("https://", ignoreCase = true) &&
+                (asset.downloadUrl.startsWith("https://", ignoreCase = true) ||
+                    (allowCleartext && asset.downloadUrl.startsWith("http://", ignoreCase = true))) &&
                 !asset.name.contains("unsigned", ignoreCase = true)
         }
         if (candidates.isEmpty()) return null
