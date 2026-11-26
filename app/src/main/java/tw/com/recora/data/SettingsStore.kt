@@ -72,7 +72,7 @@ data class AppSettings(
     val autoPlayNext: Boolean = false,
     /** 放大時截圖只存畫面上看得到的範圍（關閉時存整張）。 */
     val screenshotVisibleArea: Boolean = false,
-    /** 播放 Astro 的原始檔時，標題下顯示影片裡的 GPS（時速、座標）。 */
+    /** 播放含 GPS 的影片（Astro 原檔或剪輯檔）時，標題下顯示時速與座標。 */
     val showGps: Boolean = true,
     /** 播放有 GPS 的影片時，直向畫面下半部顯示路線地圖。 */
     val showRouteMap: Boolean = true,

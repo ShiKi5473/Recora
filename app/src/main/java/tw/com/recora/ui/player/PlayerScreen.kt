@@ -394,7 +394,7 @@ fun PlayerScreen(
     val startedAt = remember(current.title) { LocalLibrary.recordingStart(current.title) }
     val recordedAt = remember(startedAt, positionSec) { startedAt?.plusSeconds(positionSec) }
 
-    // 影片裡的 GPS（Astro 的原始檔才有）：換段時從手機上的檔案讀一次；串流中的記錄器檔案不讀。
+    // 影片裡的 GPS（Astro 原始檔或含 GPS 剪輯檔）：換段時從手機上的檔案讀一次；串流中的記錄器檔案不讀。
     // 讀完才換掉（讀檔只要幾 ms）：先清成 null 的話，換段時路線地圖會被拆掉再重建
     val gps by produceState<GpsTrack?>(null, current.url) {
         val item = current

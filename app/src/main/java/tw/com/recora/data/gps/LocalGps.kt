@@ -9,7 +9,7 @@ import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 
-/** 讀手機上影片（content://）的 GPS：只讀檔頭的 `moov` 與每秒一小段，1 分鐘的檔約 40 KB。 */
+/** 讀手機上影片（content://）的 GPS：只讀 MP4 的 `moov` 或尾端 `RECGPS01` `free` box，1 分鐘的原檔約 40 KB。 */
 object LocalGps {
     /** 沒有 GPS、不是 MP4 或讀不到都回 null。 */
     suspend fun read(context: Context, uri: String): GpsTrack? = withContext(Dispatchers.IO) {

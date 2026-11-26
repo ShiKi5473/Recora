@@ -98,17 +98,22 @@ import tw.com.recora.AppContainer
 import tw.com.recora.BuildConfig
 import tw.com.recora.data.AppSettings
 import tw.com.recora.data.Camera
+import tw.com.recora.data.DiagLog
 import tw.com.recora.data.EditPlan
 import tw.com.recora.data.ExportCodec
 import tw.com.recora.data.FileNames
 import tw.com.recora.data.LocalLibrary
 import tw.com.recora.data.Segment
+import tw.com.recora.data.gps.GpsTrack
+import tw.com.recora.data.gps.LocalGps
+import tw.com.recora.data.gps.NovatekGps
 import tw.com.recora.ui.Formats
 import tw.com.recora.ui.common.captureFrame
 import tw.com.recora.ui.player.dashcamPlayer
 import tw.com.recora.ui.player.playbackErrorMessage
 import tw.com.recora.ui.player.probeDurationMs
 import tw.com.recora.ui.settings.ExportSettingsFields
+import java.io.IOException
 import java.util.Locale
 import kotlin.math.roundToLong
 
@@ -381,11 +386,23 @@ fun EditorScreen(
             /** 第一支存好的影片（網址、檔名），匯出完按「播放」就播它。 */
             var firstSaved: Pair<String, String>? = null
             var failure: String? = null
+            val usedSegments = pieces.mapTo(HashSet()) { it.segment }
+            val mainTracks = segments.mapIndexed { seg, s ->
+                if (seg in usedSegments) LocalGps.read(context, s.uri) else null
+            }
             try {
                 for ((i, output) in outputs.withIndex()) {
                     val (uris, sourceTitle) = output
                     val name = LocalLibrary.editedName(sourceTitle, nameRange.first, nameRange.last, removeAudio)
                     val request = exportRequest(pieces.map { p -> ExportPiece(uris[p.segment], p.startMs.takeIf { it > 0 }, p.endMs) }, plan)
+                    val tracks = if (i == 0) {
+                        mainTracks
+                    } else {
+                        uris.mapIndexed { seg, u ->
+                            if (seg in usedSegments) LocalGps.read(context, u) ?: mainTracks.getOrNull(seg) else null
+                        }
+                    }
+                    val gpsTrack = GpsTrack.clip(pieces, durations, tracks)
                     val file = try {
                         exporter.export(request) { p -> exportProgress = (i * 100 + p) / outputs.size }
                     } catch (e: ExportException) {
@@ -416,6 +433,13 @@ fun EditorScreen(
                     try {
                         val savedUri = withContext(Dispatchers.IO) {
                             try {
+                                if (gpsTrack != null) {
+                                    try {
+                                        NovatekGps.appendToMp4(file, gpsTrack)
+                                    } catch (e: IOException) {
+                                        DiagLog.log("寫入剪輯 GPS 失敗：${e.message}")
+                                    }
+                                }
                                 container.sink.saveFile(file, name, "video/mp4", isImage = false)
                             } finally {
                                 file.delete()

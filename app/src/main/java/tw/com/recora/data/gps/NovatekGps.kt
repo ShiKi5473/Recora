@@ -2,6 +2,10 @@ package tw.com.recora.data.gps
 
 import com.waymap.geo.GeoUtils
 import com.waymap.geo.LatLng
+import tw.com.recora.data.EditPlan
+import java.io.File
+import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
@@ -54,18 +58,56 @@ class GpsTrack(val points: List<GpsPoint?>) {
             .filter { it.second <= maxMeters }
             .minByOrNull { it.second }?.first
     }
+
+    private data class ResolvedPiece(val segment: Int, val startMs: Long, val lengthMs: Long)
+
+    companion object {
+        /**
+         * 依剪輯分段 [pieces]（來源段索引、段內起訖毫秒）與各段長度 [durations]、GPS 軌跡 [tracks]，
+         * 裁切並接出匯出影片每一秒對應的 GPS 軌跡。完全沒有可用 GPS 時回 null。
+         */
+        fun clip(pieces: List<EditPlan.Piece>, durations: List<Long>, tracks: List<GpsTrack?>): GpsTrack? {
+            val resolved = ArrayList<ResolvedPiece>(pieces.size)
+            for (piece in pieces) {
+                val segDur = durations.getOrNull(piece.segment) ?: continue
+                val startMs = piece.startMs.coerceAtLeast(0L)
+                val endMs = (piece.endMs ?: segDur).coerceAtLeast(startMs)
+                val lengthMs = endMs - startMs
+                if (lengthMs > 0L) resolved += ResolvedPiece(piece.segment, startMs, lengthMs)
+            }
+            if (resolved.isEmpty() || resolved.none { tracks.getOrNull(it.segment) != null }) return null
+            val totalMs = resolved.sumOf { it.lengthMs }
+            val seconds = maxOf(1, ((totalMs + 500L) / 1000L).coerceAtMost(NovatekGps.MAX_EXPORT_RECORDS.toLong()).toInt())
+            var pieceIdx = 0
+            var pieceOffset = 0L
+            val points = List(seconds) { sec ->
+                val outMs = (sec * 1000L + 500L).coerceAtMost(totalMs - 1L)
+                while (pieceIdx < resolved.lastIndex && outMs >= pieceOffset + resolved[pieceIdx].lengthMs) {
+                    pieceOffset += resolved[pieceIdx].lengthMs
+                    pieceIdx++
+                }
+                val p = resolved[pieceIdx]
+                val localMs = p.startMs + (outMs - pieceOffset)
+                tracks.getOrNull(p.segment)?.pointForPosition(localMs)
+            }
+            if (points.all { it == null }) return null
+            return GpsTrack(points)
+        }
+    }
 }
 
 /**
- * 解析 Novatek 記錄器（Astro LEO3）MP4 裡的 GPS（純 Kotlin，方便測試）。
+ * 解析與寫入 MP4 裡的 GPS（純 Kotlin，方便測試）。
  *
- * 格式（2026-11-20 用 35 個 Astro 原始檔實測，前後鏡頭的檔都有）：
- * - `moov` 底下有 `gps ` box：BE u32 版本（0x101）、BE u32 筆數，接著每筆 BE u32 檔案位置、BE u32 大小，
- *   每秒一筆，指向 `mdat` 裡的 `free` box。Astro 的 `moov` 在檔頭，只要讀前面一小段。
- * - 每個 `free` box：`'free' 'GPS '` 之後，0x10 起 LE u32 時、分、秒、年、月、日（UTC），
- *   0x28 起狀態 `A`／`V`、`N`／`S`、`E`／`W`，0x2C 起 LE float 緯度、經度（DDMM.MMMM）、時速（km/h）、方向（度）。
- *   沒有加密。
- * 剪輯匯出的 MP4（Transformer）沒有這些資料。
+ * 支援兩種格式：
+ * 1. Novatek 記錄器（Astro LEO3）原始 MP4（2026-11-20 用 35 個實機檔實測，前後鏡頭都有）：
+ *    - `moov` 底下有 `gps ` box：BE u32 版本（0x101）、BE u32 筆數，接著每筆 BE u32 檔案位置、BE u32 大小，
+ *      每秒一筆，指向 `mdat` 裡的 `free` box。
+ *    - 每個 `free` box：`'free' 'GPS '` 之後，0x10 起 LE u32 時、分、秒、年、月、日（UTC），
+ *      0x28 起狀態 `A`／`V`、`N`／`S`、`E`／`W`，0x2C 起 LE float 緯度、經度（DDMM.MMMM）、時速（km/h）、方向（度）。
+ * 2. 本 App 剪輯匯出的 MP4：
+ *    - 在檔尾附加一個標準最上層 `free` box（不更動 `moov` 與 `mdat` 的 chunk 位移），
+ *      內容為 `'RECGPS01'` + BE u32 筆數 + 每秒 33 bytes 固定格式（flags、epoch 秒、Double 經緯度、Float 時速與方向）。
  */
 object NovatekGps {
     /**
@@ -82,16 +124,19 @@ object NovatekGps {
     private const val MAX_MOOV_BYTES = 2 shl 20
     /** 每秒一筆，最長的檔 5 分鐘 = 300 筆；超過一小時的索引當作壞掉的檔。 */
     private const val MAX_RECORDS = 3600
+    /** 剪輯匯出最多保留 4 小時的逐秒 GPS。 */
+    internal const val MAX_EXPORT_RECORDS = 14_400
+    private const val RECGPS_HEADER_BYTES = 12
+    private const val RECGPS_RECORD_BYTES = 33
+    private const val MAX_RECGPS_BYTES = RECGPS_HEADER_BYTES + MAX_EXPORT_RECORDS * RECGPS_RECORD_BYTES
+    private const val FLAG_PRESENT = 0x01
+    private const val FLAG_FIX = 0x02
+    private const val FLAG_HAS_UTC = 0x04
     private val GPS_MAGIC = "freeGPS ".toByteArray(Charsets.US_ASCII)
+    private val RECGPS_MAGIC = "RECGPS01".toByteArray(Charsets.US_ASCII)
 
-    /** 讀出整支影片的 GPS；檔案裡沒有 GPS 索引（例如 Mufu 的 TS、剪輯匯出的檔）回 null。 */
+    /** 讀出整支影片的 GPS；檔案裡沒有 GPS（例如 Mufu 的 TS、沒有 GPS 的影片）回 null。 */
     fun read(source: ByteSource): GpsTrack? {
-        val index = findIndex(source) ?: return null
-        return GpsTrack(index.map { (offset, size) -> if (size < RECORD_BYTES) null else parseRecord(source.read(offset, RECORD_BYTES)) })
-    }
-
-    /** 走過最上層的 box 找 `moov`（跳過 `mdat` 不讀內容），回傳 `gps ` 索引的 (位置, 大小)。 */
-    private fun findIndex(source: ByteSource): List<Pair<Long, Int>>? {
         var pos = 0L
         repeat(MAX_TOP_BOXES) {
             val header = source.read(pos, 16)
@@ -105,21 +150,166 @@ object NovatekGps {
                 size = ByteBuffer.wrap(header, 8, 8).long
                 headerLen = 16
             }
-            val isMoov = String(type, Charsets.US_ASCII) == "moov"
+            val boxType = String(type, Charsets.US_ASCII)
             if (size == 0L) {
                 // 延伸到檔尾：後面不會再有別的 box
-                return if (isMoov) parseMoov(source.read(pos + headerLen, MAX_MOOV_BYTES)) else null
+                return when (boxType) {
+                    "moov" -> readNovatekTrack(source, parseMoov(source.read(pos + headerLen, MAX_MOOV_BYTES)))
+                    "free" -> readRecoraFree(source, pos + headerLen, MAX_RECGPS_BYTES.toLong(), header, headerLen)
+                    else -> null
+                }
             }
             if (size < headerLen) return null
-            if (isMoov) {
-                val bodyLen = size - headerLen
-                if (bodyLen > MAX_MOOV_BYTES) return null
-                return parseMoov(source.read(pos + headerLen, bodyLen.toInt()))
+            val bodyLen = size - headerLen
+            when (boxType) {
+                "moov" -> if (bodyLen <= MAX_MOOV_BYTES) {
+                    parseMoov(source.read(pos + headerLen, bodyLen.toInt()))?.let { index ->
+                        return readNovatekTrack(source, index)
+                    }
+                }
+                "free" -> readRecoraFree(source, pos + headerLen, bodyLen, header, headerLen)?.let { return it }
             }
             if (size > Long.MAX_VALUE - pos - 16) return null
             pos += size
         }
         return null
+    }
+
+    /** 把 [track] 編碼成最上層 MP4 `free` box（`RECGPS01`）；沒有任何點時回 null。 */
+    fun encodeBox(track: GpsTrack): ByteArray? {
+        if (track.points.isEmpty() || track.points.all { it == null }) return null
+        val count = minOf(track.points.size, MAX_EXPORT_RECORDS)
+        val payloadSize = RECGPS_HEADER_BYTES + count * RECGPS_RECORD_BYTES
+        val boxSize = 8 + payloadSize
+        val buf = ByteBuffer.allocate(boxSize)
+        buf.putInt(boxSize)
+        buf.put("free".toByteArray(Charsets.US_ASCII))
+        buf.put(RECGPS_MAGIC)
+        buf.putInt(count)
+        for (i in 0 until count) {
+            val p = track.points[i]
+            if (p == null) {
+                buf.put(0)
+                buf.position(buf.position() + (RECGPS_RECORD_BYTES - 1))
+            } else {
+                var flags = FLAG_PRESENT
+                if (p.fix) flags = flags or FLAG_FIX
+                val utc = p.utc
+                if (utc != null) flags = flags or FLAG_HAS_UTC
+                buf.put(flags.toByte())
+                buf.putLong(utc?.epochSecond ?: 0L)
+                buf.putDouble(p.latitude)
+                buf.putDouble(p.longitude)
+                buf.putFloat(p.speedKmh)
+                buf.putFloat(p.trackDeg)
+            }
+        }
+        return buf.array()
+    }
+
+    /**
+     * 驗證 [file] 是結構完整的 MP4 後，在檔尾附加一個 `RECGPS01` `free` box。
+     * 不是 MP4、結構不完整（含 size == 0 的未封口 box）或沒有可用 GPS 時不改動檔案並回傳 false。
+     */
+    @Throws(IOException::class)
+    fun appendToMp4(file: File, track: GpsTrack): Boolean {
+        val box = encodeBox(track) ?: return false
+        RandomAccessFile(file, "rw").use { raf ->
+            val end = verifiedMp4End(raf) ?: return false
+            raf.seek(end)
+            try {
+                raf.write(box)
+            } catch (e: IOException) {
+                runCatching { raf.setLength(end) }
+                throw e
+            }
+        }
+        return true
+    }
+
+    private fun verifiedMp4End(raf: RandomAccessFile): Long? {
+        val len = raf.length()
+        if (len < 8L) return null
+        var pos = 0L
+        val header = ByteArray(16)
+        repeat(MAX_TOP_BOXES) {
+            if (pos == len) return len
+            if (pos > len || len - pos < 8L) return null
+            raf.seek(pos)
+            val toRead = minOf(16L, len - pos).toInt()
+            raf.readFully(header, 0, toRead)
+            if (!(4..7).all { header[it] in 0x20..0x7E }) return null
+            var size = u32be(header, 0)
+            var headerLen = 8
+            if (size == 1L) {
+                if (toRead < 16) return null
+                size = ByteBuffer.wrap(header, 8, 8).long
+                headerLen = 16
+            }
+            if (size == 0L || size < headerLen || size > len - pos) return null
+            pos += size
+        }
+        return if (pos == len) len else null
+    }
+
+    private fun readNovatekTrack(source: ByteSource, index: List<Pair<Long, Int>>?): GpsTrack? {
+        if (index == null) return null
+        return GpsTrack(index.map { (offset, size) -> if (size < RECORD_BYTES) null else parseRecord(source.read(offset, RECORD_BYTES)) })
+    }
+
+    private fun readRecoraFree(
+        source: ByteSource,
+        bodyPos: Long,
+        bodyLen: Long,
+        header: ByteArray,
+        headerLen: Int,
+    ): GpsTrack? {
+        if (bodyLen < RECGPS_HEADER_BYTES) return null
+        if (headerLen == 8) {
+            if (header.size < 16 || !RECGPS_MAGIC.indices.all { header[8 + it] == RECGPS_MAGIC[it] }) return null
+        }
+        val toRead = minOf(bodyLen, MAX_RECGPS_BYTES.toLong()).toInt()
+        return parseRecoraGps(source.read(bodyPos, toRead))
+    }
+
+    private fun parseRecoraGps(body: ByteArray): GpsTrack? {
+        if (body.size < RECGPS_HEADER_BYTES) return null
+        if (!RECGPS_MAGIC.indices.all { body[it] == RECGPS_MAGIC[it] }) return null
+        val buf = ByteBuffer.wrap(body)
+        val countLong = buf.getInt(8).toLong() and 0xFFFF_FFFFL
+        if (countLong == 0L || countLong > MAX_EXPORT_RECORDS) return null
+        val count = countLong.toInt()
+        if (body.size < RECGPS_HEADER_BYTES + count * RECGPS_RECORD_BYTES) return null
+        var anyNonNull = false
+        val points = List(count) { i ->
+            val off = RECGPS_HEADER_BYTES + i * RECGPS_RECORD_BYTES
+            val flags = body[off].toInt() and 0xFF
+            if (flags == 0 || (flags and FLAG_PRESENT) == 0) {
+                null
+            } else {
+                anyNonNull = true
+                val epochSec = buf.getLong(off + 1)
+                val lat = buf.getDouble(off + 9)
+                val lon = buf.getDouble(off + 17)
+                val speed = buf.getFloat(off + 25).let { if (it.isFinite()) it else 0f }
+                val trackDeg = buf.getFloat(off + 29).let { if (it.isFinite()) it else 0f }
+                val utc = if ((flags and FLAG_HAS_UTC) != 0) {
+                    runCatching { Instant.ofEpochSecond(epochSec) }.getOrNull()
+                } else {
+                    null
+                }
+                val fix = (flags and FLAG_FIX) != 0 && lat.isFinite() && lon.isFinite() && abs(lat) <= 90.0 && abs(lon) <= 180.0
+                GpsPoint(
+                    utc = utc,
+                    fix = fix,
+                    latitude = if (lat.isFinite()) lat else 0.0,
+                    longitude = if (lon.isFinite()) lon else 0.0,
+                    speedKmh = speed,
+                    trackDeg = trackDeg,
+                )
+            }
+        }
+        return if (anyNonNull) GpsTrack(points) else null
     }
 
     private fun parseMoov(moov: ByteArray): List<Pair<Long, Int>>? {

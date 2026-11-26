@@ -5,10 +5,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tw.com.recora.data.EditPlan
+import tw.com.recora.data.gps.GpsPoint
+import tw.com.recora.data.gps.GpsTrack
+import tw.com.recora.data.gps.Gpx
 import tw.com.recora.data.gps.NovatekGps
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
 import java.time.Instant
 import kotlin.random.Random
 
@@ -154,6 +159,197 @@ class NovatekGpsTest {
             repeat(1 + random.nextInt(4)) { bad[random.nextInt(bad.size)] = random.nextInt(256).toByte() }
             NovatekGps.read(source(bad))
         }
+    }
+
+    @Test
+    fun clipSingleSegmentMiddleFullAndMinimum() {
+        val t0 = Instant.parse("2026-11-20T01:00:00Z")
+        val track = GpsTrack(
+            List(60) { i ->
+                GpsPoint(t0.plusSeconds(i.toLong()), fix = true, latitude = 24.0 + i * 0.001, longitude = 120.5 + i * 0.001, speedKmh = 50f, trackDeg = 90f)
+            },
+        )
+        // 中間剪 15 秒：10..24
+        val midPieces = EditPlan.pieces(listOf(60_050L), 10_000L, 25_000L)
+        val mid = GpsTrack.clip(midPieces, listOf(60_050L), listOf(track))!!
+        assertEquals(15, mid.points.size)
+        assertEquals(track.points.subList(10, 25), mid.points)
+
+        // 整段 60.05 秒不剪掉尾端：維持 60 筆，不多出一筆重複的
+        val fullPieces = EditPlan.pieces(listOf(60_050L), 0L, 60_050L)
+        val full = GpsTrack.clip(fullPieces, listOf(60_050L), listOf(track))!!
+        assertEquals(60, full.points.size)
+        assertEquals(track.points, full.points)
+
+        // 最短 500ms 剪輯仍保留 1 筆
+        val minPieces = EditPlan.pieces(listOf(60_050L), 12_000L, 12_500L)
+        val minClip = GpsTrack.clip(minPieces, listOf(60_050L), listOf(track))!!
+        assertEquals(listOf(track.points[12]), minClip.points)
+
+        // 沒有 GPS 或全部為 null 回 null
+        assertNull(GpsTrack.clip(midPieces, listOf(60_050L), listOf(null)))
+        assertNull(GpsTrack.clip(midPieces, listOf(60_050L), listOf(GpsTrack(List(60) { null }))))
+    }
+
+    @Test
+    fun clipMultiSegmentWithOverhangAndGpx() {
+        val t0 = Instant.parse("2026-11-20T01:00:00Z")
+        fun segTrack(startSec: Int, count: Int, baseLat: Double) = GpsTrack(
+            List(count) { i ->
+                GpsPoint(
+                    utc = t0.plusSeconds((startSec + i).toLong()),
+                    fix = true,
+                    latitude = baseLat + i * 0.0001,
+                    longitude = 120.6,
+                    speedKmh = 60f,
+                    trackDeg = 180f,
+                )
+            },
+        )
+        val durations = listOf(180_050L, 180_030L, 60_020L)
+        val tracks = listOf(segTrack(0, 180, 24.0), segTrack(180, 180, 25.0), segTrack(360, 60, 26.0))
+        val pieces = EditPlan.pieces(durations, 170_000L, 380_000L)
+        val clipped = GpsTrack.clip(pieces, durations, tracks)!!
+        assertEquals(210, clipped.points.size)
+        val expected = tracks[0].points.subList(170, 180) + tracks[1].points + tracks[2].points.subList(0, 20)
+        assertEquals(expected, clipped.points)
+
+        val gpx = Gpx.write("multi", clipped)!!
+        val trkpts = gpx.lines().filter { it.startsWith("<trkpt") }
+        assertEquals(210, trkpts.size)
+        assertTrue(trkpts.first().contains("<time>2026-11-20T01:02:50Z</time>"))
+        assertTrue(trkpts.last().contains("<time>2026-11-20T01:06:19Z</time>"))
+
+        // 中間那段沒有 GPS 時，前後兩段依然保留
+        val partial = GpsTrack.clip(pieces, durations, listOf(tracks[0], null, tracks[2]))!!
+        assertEquals(210, partial.points.size)
+        assertEquals(tracks[0].points.subList(170, 180), partial.points.subList(0, 10))
+        assertTrue(partial.points.subList(10, 190).all { it == null })
+        assertEquals(tracks[2].points.subList(0, 20), partial.points.subList(190, 210))
+    }
+
+    @Test
+    fun appendToMp4AndReadRoundTrip() {
+        val t0 = Instant.parse("2026-11-16T00:59:59Z")
+        val track = GpsTrack(
+            listOf(
+                GpsPoint(t0, fix = true, latitude = 24.16603191234567, longitude = 120.61879887654321, speedKmh = 68.5f, trackDeg = 123.25f),
+                GpsPoint(t0.plusSeconds(1), fix = true, latitude = -33.875123456789, longitude = -151.204166712345, speedKmh = 12.25f, trackDeg = 270.5f),
+                GpsPoint(t0.plusSeconds(2), fix = false, latitude = 0.0, longitude = 0.0, speedKmh = 0f, trackDeg = 0f),
+                GpsPoint(null, fix = true, latitude = 25.033964, longitude = 121.564468, speedKmh = 45f, trackDeg = 0f),
+                null,
+            ),
+        )
+        // moov 在 mdat 前（含一個 Media3 常見的補白 free box）
+        val moovFirstBytes = exportedMp4(moovFirst = true)
+        val tmp = Files.createTempFile("recora_gps_", ".mp4").toFile()
+        try {
+            tmp.writeBytes(moovFirstBytes)
+            assertTrue(NovatekGps.appendToMp4(tmp, track))
+            val decoded = NovatekGps.read(source(tmp.readBytes()))!!
+            assertEquals(track.points, decoded.points)
+        } finally {
+            tmp.delete()
+        }
+
+        // mdat 在 moov 前
+        val mdatFirstBytes = exportedMp4(moovFirst = false)
+        val tmp2 = Files.createTempFile("recora_gps2_", ".mp4").toFile()
+        try {
+            tmp2.writeBytes(mdatFirstBytes)
+            assertTrue(NovatekGps.appendToMp4(tmp2, track))
+            val decoded = NovatekGps.read(source(tmp2.readBytes()))!!
+            assertEquals(track.points, decoded.points)
+        } finally {
+            tmp2.delete()
+        }
+    }
+
+    @Test
+    fun reEditClippedMp4PreservesGps() {
+        val t0 = Instant.parse("2026-11-20T05:00:00Z")
+        val orig = GpsTrack(
+            List(20) { i ->
+                GpsPoint(t0.plusSeconds(i.toLong()), fix = true, latitude = 24.1 + i * 0.0005, longitude = 120.6 + i * 0.0005, speedKmh = 40f + i, trackDeg = 45f)
+            },
+        )
+        val firstFile = Files.createTempFile("recora_edit1_", ".mp4").toFile()
+        val secondFile = Files.createTempFile("recora_edit2_", ".mp4").toFile()
+        try {
+            firstFile.writeBytes(exportedMp4(moovFirst = true))
+            assertTrue(NovatekGps.appendToMp4(firstFile, orig))
+            val readFirst = NovatekGps.read(source(firstFile.readBytes()))!!
+
+            val subPieces = EditPlan.pieces(listOf(20_000L), 5_000L, 12_000L)
+            val reClipped = GpsTrack.clip(subPieces, listOf(20_000L), listOf(readFirst))!!
+            secondFile.writeBytes(exportedMp4(moovFirst = true))
+            assertTrue(NovatekGps.appendToMp4(secondFile, reClipped))
+
+            val readSecond = NovatekGps.read(source(secondFile.readBytes()))!!
+            assertEquals(7, readSecond.points.size)
+            assertEquals(orig.points.subList(5, 12), readSecond.points)
+        } finally {
+            firstFile.delete()
+            secondFile.delete()
+        }
+    }
+
+    @Test
+    fun appendToMp4LeavesInvalidFilesUntouched() {
+        val track = GpsTrack(listOf(GpsPoint(null, fix = true, latitude = 24.0, longitude = 120.5, speedKmh = 30f, trackDeg = 0f)))
+        val tmp = Files.createTempFile("recora_invalid_", ".mp4").toFile()
+        try {
+            // 不是 MP4（例如 TS）
+            val ts = ByteArray(188 * 2) { if (it % 188 == 0) 0x47 else 0x11 }
+            tmp.writeBytes(ts)
+            assertFalse(NovatekGps.appendToMp4(tmp, track))
+            assertTrue(ts.contentEquals(tmp.readBytes()))
+
+            // 含有 size == 0 的未封口 box
+            val ftyp = box("ftyp", "mp42".toByteArray())
+            val openMdat = ByteBuffer.allocate(24).putInt(0).put("mdat".toByteArray()).array()
+            val unterminated = ftyp + openMdat
+            tmp.writeBytes(unterminated)
+            assertFalse(NovatekGps.appendToMp4(tmp, track))
+            assertTrue(unterminated.contentEquals(tmp.readBytes()))
+
+            // 長度與 box 宣告不符（截斷）
+            val truncated = exportedMp4(moovFirst = true).let { it.copyOf(it.size - 10) }
+            tmp.writeBytes(truncated)
+            assertFalse(NovatekGps.appendToMp4(tmp, track))
+            assertTrue(truncated.contentEquals(tmp.readBytes()))
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    @Test
+    fun recGpsTruncatedOrCorruptedFilesNeverThrow() {
+        val t0 = Instant.parse("2026-11-20T01:00:00Z")
+        val track = GpsTrack(
+            listOf(
+                GpsPoint(t0, fix = true, latitude = 24.166, longitude = 120.618, speedKmh = 60f, trackDeg = 10f),
+                null,
+                GpsPoint(t0.plusSeconds(2), fix = false, latitude = 0.0, longitude = 0.0, speedKmh = 0f, trackDeg = 0f),
+            ),
+        )
+        val file = exportedMp4(moovFirst = true) + NovatekGps.encodeBox(track)!!
+        for (len in 0..file.size) NovatekGps.read(source(file.copyOf(len)))
+        val random = Random(20261126)
+        repeat(20_000) {
+            val bad = file.copyOf()
+            repeat(1 + random.nextInt(4)) { bad[random.nextInt(bad.size)] = random.nextInt(256).toByte() }
+            NovatekGps.read(source(bad))
+        }
+    }
+
+    /** 模擬 Transformer 匯出的 MP4：ftyp + moov（無 gps box）+ 補白 free box + mdat。 */
+    private fun exportedMp4(moovFirst: Boolean): ByteArray {
+        val ftyp = box("ftyp", "mp42".toByteArray() + ByteArray(4) + "isommp42".toByteArray())
+        val moov = box("moov", box("mvhd", ByteArray(100)))
+        val padFree = box("free", ByteArray(64))
+        val mdat = box("mdat", ByteArray(512) { 0x55 })
+        return if (moovFirst) ftyp + moov + padFree + mdat else ftyp + mdat + moov + padFree
     }
 
     // --- 假 MP4 ---
