@@ -52,9 +52,16 @@ class DownloadService : Service() {
             return START_NOT_STICKY
         }
         createChannels()
-        ServiceCompat.startForeground(
-            this, PROGRESS_ID, buildProgress(repo.tasks.value), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-        )
+        val notification = buildProgress(repo.tasks.value)
+        try {
+            ServiceCompat.startForeground(
+                this, PROGRESS_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            )
+        } catch (e: SecurityException) {
+            ServiceCompat.startForeground(
+                this, PROGRESS_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        }
         if (!observing) {
             observing = true
             finishedAtStart = repo.tasks.value.filter { !it.isActive }.map { it.id }.toSet()
@@ -70,11 +77,15 @@ class DownloadService : Service() {
     }
 
     /**
-     * Android 15+ 的 dataSync 時間上限到了：取消佇列並馬上停止（系統只給幾秒，不等佇列真的結束）。
-     * 已下載的部分保留，再次下載會從中斷處續傳。
+     * Android 14/15+ 前景服務時間上限到了：暫停下載並馬上停止服務，保留佇列與已下載進度以便下次自動續傳。
      */
+    override fun onTimeout(startId: Int) {
+        repo.pauseForTimeout()
+        stop(force = true)
+    }
+
     override fun onTimeout(startId: Int, fgsType: Int) {
-        repo.cancelAll()
+        repo.pauseForTimeout()
         stop(force = true)
     }
 

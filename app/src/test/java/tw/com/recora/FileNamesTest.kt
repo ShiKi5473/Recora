@@ -168,6 +168,10 @@ class FileNamesTest {
         assertEquals("Camera.Menu.*", FileNames.encodeQueryValue("Camera.Menu.*"))
         assertEquals("\$mnt\$mmc\$Video", FileNames.encodeQueryValue("\$mnt\$mmc\$Video"))
         assertEquals("a%2Fb%20c", FileNames.encodeQueryValue("a/b c"))
+        assertEquals(
+            "A:\\DCIM\\VIDEO_F\\clip%20%231%26a.MP4",
+            FileNames.encodeQueryValue("A:\\DCIM\\VIDEO_F\\clip #1&a.MP4", keep = "\\:"),
+        )
     }
 
     @Test

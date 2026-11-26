@@ -1,7 +1,5 @@
 package tw.com.recora.download
 
-import android.content.Context
-import android.net.Uri
 import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -28,9 +26,21 @@ import tw.com.recora.data.api.DashcamApi
 import tw.com.recora.data.net.DashcamAccess
 import tw.com.recora.data.net.DashcamOfflineException
 import java.io.IOException
+import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 
 enum class TaskStatus { Queued, Running, Done, Skipped, Failed, Cancelled }
+
+/** 下載寫入目的地的抽象介面（實作：[MediaStoreSink.asDownloadSink]），方便 JVM 單元測試。 */
+interface DownloadSink {
+    data class Entry(val uri: String, val name: String, val size: Long, val pending: Boolean)
+
+    fun find(name: String, isImage: Boolean): Entry?
+    fun create(name: String, isImage: Boolean, subdir: String? = null): String
+    fun openOutput(uri: String, offset: Long): OutputStream
+    fun finish(uri: String)
+    fun delete(uri: String)
+}
 
 data class DownloadTask(
     val file: DashcamFile,
@@ -39,7 +49,7 @@ data class DownloadTask(
     val total: Long = file.size,
     val speedBps: Long = 0,
     val message: String? = null,
-    val resultUri: Uri? = null,
+    val resultUri: String? = null,
 ) {
     val id: String get() = file.sdPath
     val isActive: Boolean get() = status == TaskStatus.Queued || status == TaskStatus.Running
@@ -54,15 +64,16 @@ data class DownloadTask(
  * 萬一 recordon 前就斷線，反而可能讓記錄器離線後不再錄影。Astro 由 [DashcamApi.withFiles] 停錄、用完自動恢復。
  */
 class DownloadRepository(
-    private val context: Context,
     private val api: (Brand) -> DashcamApi,
-    private val sink: MediaStoreSink,
+    private val sink: DownloadSink,
     httpClient: OkHttpClient,
     private val scope: CoroutineScope,
     /** 佇列存檔：App 重開後還在；null = 不保存（測試用）。 */
     queueStore: QueueStore?,
     /** 下載到 App 資料夾底下的哪個子資料夾（依「下載資料夾分類」設定）。 */
     private val subdirOf: (DashcamFile) -> String? = { null },
+    /** 啟動前景服務保持背景下載（測試時可略過）。 */
+    private val startService: () -> Unit = {},
     /** 目前連著（而且請求真的到得了）的記錄器，沒有則為 null。 */
     private val connectedBrand: () -> Brand?,
 ) : DashcamAccess.Downloads {
@@ -77,6 +88,10 @@ class DownloadRepository(
     val active: StateFlow<Boolean> = _active.asStateFlow()
 
     private var worker: Job? = null
+    private var workerToDrain: Job? = null
+
+    @Volatile
+    private var timedOut = false
 
     @Volatile
     private var current: Pair<String, Job>? = null
@@ -84,7 +99,10 @@ class DownloadRepository(
     /** [hold] 的次數；大於 0 時佇列暫停（例如正在從記錄器串流播放）。 */
     private val holds = MutableStateFlow(0)
 
-    /** 因 [hold]／[pauseForDisconnect] 而中斷的那個檔案（id → 等待時顯示的訊息）：回到等待中，而不是變成「已取消」。 */
+    /** 連線狀態或中斷喚醒信號，讓 [holds] > 0 期間斷線時等待中的 worker 能醒來收尾。 */
+    private val wakeup = MutableStateFlow(0L)
+
+    /** 因 [hold]／[pauseForDisconnect]／[pauseForTimeout] 而中斷的那個檔案（id → 等待時顯示的訊息）：回到等待中，而不是變成「已取消」。 */
     @Volatile
     private var pausing: Pair<String, String>? = null
 
@@ -114,16 +132,21 @@ class DownloadRepository(
             added = fresh.size
             list.filterNot { it.id in freshIds } + fresh.map { DownloadTask(it) }
         }
-        if (added > 0) startWorker()
+        if (added > 0) {
+            timedOut = false
+            startWorker()
+        }
         return added
     }
 
     fun retry(id: String) {
+        timedOut = false
         _tasks.update { list -> list.map { if (it.id == id && !it.isActive) DownloadTask(it.file) else it } }
         startWorker()
     }
 
     fun retryAllFailed() {
+        timedOut = false
         _tasks.update { list ->
             list.map {
                 if (it.status == TaskStatus.Failed || it.status == TaskStatus.Cancelled) DownloadTask(it.file) else it
@@ -172,14 +195,41 @@ class DownloadRepository(
 
     /**
      * 中斷連線時呼叫：正在下載的檔案停在目前位置、回到等待中（保留 pending 檔，重新連上後從中斷處續傳），
-     * 不標成已取消，也不再對記錄器重試。沒有在下載就什麼都不做。
+     * 不標成已取消，也不再對記錄器重試。沒有在下載時也要喚醒因 [hold] 等待中的 worker。
      */
     @Synchronized
     fun pauseForDisconnect() {
-        val (id, job) = current ?: return
-        val task = _tasks.value.firstOrNull { it.id == id } ?: return
-        pausing = id to waitingMessage(task.file.brand)
-        job.cancel()
+        current?.let { (id, job) ->
+            val task = _tasks.value.firstOrNull { it.id == id }
+            if (task != null) {
+                pausing = id to waitingMessage(task.file.brand)
+                job.cancel()
+            }
+        }
+        markWaiting()
+        wakeup.update { it + 1 }
+    }
+
+    /**
+     * Android 15+ 前景服務到達系統時間上限時呼叫：停下下載與 worker，
+     * 但維持 [TaskStatus.Queued] 並保留佇列與 pending 檔，下次開啟 App 連上記錄器後自動續傳。
+     */
+    @Synchronized
+    fun pauseForTimeout() {
+        timedOut = true
+        current?.let { (id, job) ->
+            pausing = id to TIMEOUT_MESSAGE
+            job.cancel()
+        }
+        worker?.let {
+            workerToDrain = it
+            worker = null
+        }
+        _active.value = false
+        _tasks.update { list ->
+            list.map { if (it.isActive) it.copy(status = TaskStatus.Queued, speedBps = 0, message = TIMEOUT_MESSAGE) else it }
+        }
+        wakeup.update { it + 1 }
     }
 
     override fun release() {
@@ -188,12 +238,15 @@ class DownloadRepository(
     }
 
     /** 連上記錄器時呼叫：接著下載斷線前沒下載完的檔案。 */
-    fun resume() = startWorker()
+    fun resume() {
+        timedOut = false
+        startWorker()
+    }
 
     @Synchronized
     private fun startWorker() {
         if (worker != null) return
-        if (holds.value > 0) return
+        if (timedOut || holds.value > 0) return
         if (_tasks.value.none { it.status == TaskStatus.Queued }) return
         if (nextRunnable() == null) {
             markWaiting()
@@ -202,17 +255,20 @@ class DownloadRepository(
         _tasks.update { list -> list.map { if (it.status == TaskStatus.Queued) it.copy(message = null) else it } }
         _active.value = true
         try {
-            DownloadService.start(context)
+            startService()
         } catch (e: IllegalStateException) {
             // 背景時不允許啟動前景服務；App 在前景時佇列照常執行
         }
+        val drain = workerToDrain
+        workerToDrain = null
         val job = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             try {
-                while (true) {
+                drain?.join()
+                while (!timedOut) {
                     runQueue()
                     // 與 startWorker 同步檢查：收尾期間新加入的檔案由同一個 worker 接著處理
                     val more = synchronized(this@DownloadRepository) {
-                        val queued = nextRunnable() != null
+                        val queued = !timedOut && nextRunnable() != null
                         if (!queued) {
                             worker = null
                             _active.value = false
@@ -222,8 +278,8 @@ class DownloadRepository(
                     if (!more) break
                     // 暫停中（串流播放、送指令）：worker 與前景服務留著等，恢復後接著下載。
                     // 不結束再重開：指令造成的暫停很頻繁，而且 App 在背景時不一定能重新啟動前景服務
-                    // 等待中全部取消了也要結束（服務不能留著空等到恢復）
-                    combine(holds, _tasks) { h, _ -> h == 0 || nextRunnable() == null }.first { it }
+                    // 等待中全部取消或斷線了也要結束（服務不能留著空等到恢復）
+                    combine(holds, _tasks, wakeup) { h, _, _ -> timedOut || h == 0 || nextRunnable() == null }.first { it }
                 }
             } finally {
                 val self = coroutineContext.job
@@ -240,20 +296,27 @@ class DownloadRepository(
     }
 
     private suspend fun runQueue() = coroutineScope {
-        while (true) {
+        while (!timedOut) {
             if (_tasks.value.none { it.status == TaskStatus.Queued }) break
             val next = nextRunnable()
             if (next == null) {
                 markWaiting()
                 break
             }
-            // 與 hold()、pauseForDisconnect() 同步：暫停或中斷連線之後不再開始下一個檔案
+            // 與 hold()、pauseForDisconnect()、pauseForTimeout() 同步：暫停或中斷連線之後不再開始下一個檔案
             val job = synchronized(this@DownloadRepository) {
-                if (holds.value > 0 || connectedBrand() != next.file.brand) null else launch { runTask(next) }.also { current = next.id to it }
+                if (timedOut || holds.value > 0 || connectedBrand() != next.file.brand) {
+                    null
+                } else {
+                    launch { runTask(next) }.also { current = next.id to it }
+                }
             } ?: break
-            job.join()
-            current = null
-            pausing = null
+            try {
+                job.join()
+            } finally {
+                current = null
+                if (!job.isActive) pausing = null
+            }
         }
     }
 
@@ -293,7 +356,7 @@ class DownloadRepository(
         }
     }
 
-    private suspend fun download(task: DownloadTask, existing: MediaStoreSink.Entry?) {
+    private suspend fun download(task: DownloadTask, existing: DownloadSink.Entry?) {
         val f = task.file
         run {
             val url = api(f.brand).resolveUrl(f.sdPath)
@@ -386,6 +449,7 @@ class DownloadRepository(
     }
 
     private companion object {
+        const val TIMEOUT_MESSAGE = "系統背景下載時間已達上限，開啟 App 後自動繼續"
         fun waitingMessage(brand: Brand) = "等待連線：連上 ${brand.label} 記錄器後會自動從中斷處繼續"
     }
 }

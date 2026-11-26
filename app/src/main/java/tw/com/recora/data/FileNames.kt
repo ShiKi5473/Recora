@@ -159,16 +159,17 @@ object FileNames {
     )
 
     /**
-     * 查詢參數的百分比編碼，但 `*` 與 `$` 原樣送出：
+     * 查詢參數的百分比編碼，預設保留 `*` 與 `$` 原樣送出（MUFU）：
      * `Camera.Menu.*` 的萬用字元要原樣；實測記錄器的 CGI 不會把 `%24` 解回 `$`，
      * del 的路徑與 TimeSettings 都必須送原始的 `$`（送 `%24` 會回 "no key found!"）。
+     * Astro 可傳入 `keep = "\\:"` 保留路徑反斜線與冒號。
      */
-    fun encodeQueryValue(value: String): String {
+    fun encodeQueryValue(value: String, keep: String = "*$"): String {
         val sb = StringBuilder()
         for (b in value.toByteArray(Charsets.UTF_8)) {
             val c = b.toInt() and 0xff
             val ch = c.toChar()
-            if (ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9' || ch in "-_.~*$") {
+            if (ch in 'A'..'Z' || ch in 'a'..'z' || ch in '0'..'9' || ch in "-_.~" || ch in keep) {
                 sb.append(ch)
             } else {
                 sb.append('%').append(String.format(Locale.ROOT, "%02X", c))

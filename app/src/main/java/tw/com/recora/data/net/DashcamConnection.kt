@@ -69,7 +69,10 @@ class DashcamConnection(
     /** 診斷紀錄（與 API 請求共用）。 */
     val log: StateFlow<List<String>> = DiagLog.lines
 
-    /** 每次連上後呼叫（對時、自動備份緊急錄影、接著下載沒下載完的檔案），傳入連上的記錄器。 */
+    /** 對外發佈 [ConnState.Connected] 前呼叫（對時、Astro keep-alive 與錄影狀態檢查），避免被畫面讀列表搶先鎖住。 */
+    var onBeforeConnected: (suspend (DashcamApi) -> Unit)? = null
+
+    /** 每次連上後呼叫（自動備份緊急錄影、接著下載沒下載完的檔案），傳入連上的記錄器。 */
     var onConnected: (suspend (DashcamApi) -> Unit)? = null
 
     /**
@@ -123,11 +126,14 @@ class DashcamConnection(
                 .build()
             val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
+                    val self = this
                     log("已連上 Wi-Fi（$network）")
                     scope.launch {
                         if (!tryBind(network, brand, userSelected = true)) {
+                            val vpn = blockedByVpn
+                            releaseRequest(self)
                             _state.value = ConnState.Failed(
-                                if (blockedByVpn) {
+                                if (vpn) {
                                     VPN_BLOCKED_MESSAGE
                                 } else {
                                     "已連上 Wi-Fi，但無法使用此網路（詳見「裝置」頁的診斷紀錄）"
@@ -139,7 +145,7 @@ class DashcamConnection(
 
                 override fun onUnavailable() {
                     log("系統回報：找不到或使用者取消")
-                    requestCallback = null
+                    releaseRequest(this)
                     if (_state.value == ConnState.Requesting) {
                         _state.value = ConnState.Failed("未連線：找不到 $prefix… 的 Wi-Fi，或已取消")
                     }
@@ -201,9 +207,17 @@ class DashcamConnection(
         if (result.ok) {
             synchronized(bindLock) {
                 boundBrand = brand
-                _state.value = ConnState.Connected(viaOverride = true, brand = brand)
             }
-            scope.launch { onConnected?.invoke(api) }
+            onBeforeConnected?.invoke(api)
+            val connectedNow = synchronized(bindLock) {
+                if (boundBrand == brand) {
+                    _state.value = ConnState.Connected(viaOverride = true, brand = brand)
+                    true
+                } else {
+                    false
+                }
+            }
+            if (connectedNow) scope.launch { onConnected?.invoke(api) }
         } else {
             _state.value = ConnState.Failed("連不到 ${api.host}：${result.detail}")
         }
@@ -268,12 +282,20 @@ class DashcamConnection(
             }
             boundNetwork = network
             boundBrand = brand
-            _state.value = ConnState.Connected(viaOverride = false, brand = brand)
+            if (!ok) _state.value = ConnState.Connected(viaOverride = false, brand = brand)
             true
         }
         if (bound) {
             log("已綁定到 ${brand.label} 記錄器的網路")
-            onConnected?.invoke(api)
+            if (ok) {
+                onBeforeConnected?.invoke(api)
+                synchronized(bindLock) {
+                    if (boundNetwork == network && boundBrand == brand) {
+                        _state.value = ConnState.Connected(viaOverride = false, brand = brand)
+                    }
+                }
+            }
+            if (_state.value is ConnState.Connected) onConnected?.invoke(api)
         }
         return bound
     }
@@ -323,9 +345,12 @@ class DashcamConnection(
         return true
     }
 
-    private fun releaseRequest() {
-        requestCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
-        requestCallback = null
+    private fun releaseRequest(only: ConnectivityManager.NetworkCallback? = null) {
+        val cb = synchronized(bindLock) {
+            if (only != null && requestCallback !== only) return
+            requestCallback.also { requestCallback = null }
+        }
+        cb?.let { runCatching { cm.unregisterNetworkCallback(it) } }
     }
 
     private fun wifiRequest(spec: WifiNetworkSpecifier?): NetworkRequest =

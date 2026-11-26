@@ -31,6 +31,7 @@ import tw.com.recora.data.net.DashcamConnection
 import tw.com.recora.data.net.RouteGuard
 import tw.com.recora.download.DownloadFolders
 import tw.com.recora.download.DownloadRepository
+import tw.com.recora.download.DownloadService
 import tw.com.recora.download.EventBackup
 import tw.com.recora.download.MediaStoreSink
 import tw.com.recora.download.QueueStore
@@ -122,9 +123,10 @@ class AppContainer(val app: Application) {
 
     /** 下載佇列用未包裝的實作：它自己就是 [access] 要暫停的對象。 */
     val downloads = DownloadRepository(
-        app, ::apiOf, sink, http, appScope,
+        ::apiOf, sink.asDownloadSink(), http, appScope,
         queueStore = QueueStore(File(app.filesDir, "download_queue.tsv")),
         subdirOf = { file -> DownloadFolders.subdir(file, settings.state.value.downloadSubfolder) },
+        startService = { DownloadService.start(app) },
     ) {
         // 兩個條件都要：斷線的瞬間（狀態還沒更新但已解除綁定）不會一直重跑被 RouteGuard 擋下的檔案
         if (connection.isConnected && connection.canReachDashcam) connection.boundBrand else null
@@ -158,8 +160,8 @@ class AppContainer(val app: Application) {
     val calibrationJob = MutableStateFlow<CalibrationJob?>(null)
 
     init {
-        connection.onConnected = { dashcam ->
-            // 同官方 App：每次連上都把手機時間寫入記錄器（跟同時開著的頁面讀列表、狀態排隊，不同時送）
+        connection.onBeforeConnected = { dashcam ->
+            // 同官方 App：每次連上都把手機時間寫入記錄器；先於畫面讀列表完成，確保 Astro keep-alive 與錄影檢查不會被卡在列表後面
             try {
                 val sync = access.command { dashcam.syncTime() }
                 DiagLog.log("對時：${if (sync.ok) "成功" else "失敗"}（${DiagLog.compact(sync.body, 80)}）")
@@ -172,6 +174,8 @@ class AppContainer(val app: Application) {
             } catch (e: IOException) {
                 DiagLog.log("連線後初始化失敗：${e.message}")
             }
+        }
+        connection.onConnected = {
             // App 設定：連上時自動備份還沒下載的緊急錄影（先讀完列表再開始下載，不跟下載搶記錄器的連線）
             if (settings.current().autoBackupEvents) {
                 try {

@@ -87,10 +87,13 @@ class AstroApi(
     private var sizes: List<Pair<String, String>>? = null
 
     /**
-     * 查詢參數原樣送出（`str=A:\DCIM\…`、`str=12:38:59`），同官方 App；OkHttp 解析字串網址時查詢裡的 `\`、`:` 會保留。
+     * 查詢參數原樣保留 `\` 與 `:`（`str=A:\DCIM\…`、`str=12:38:59`），同官方 App；
+     * 空白、`#`、`&`、`%` 等特殊字元仍做百分比編碼，避免破壞查詢字串。
      */
     fun commandUrl(cmd: Int, par: String? = null, str: String? = null): String =
-        "http://$host/?custom=1&cmd=$cmd" + (par?.let { "&par=$it" } ?: "") + (str?.let { "&str=$it" } ?: "")
+        "http://$host/?custom=1&cmd=$cmd" +
+            (par?.let { "&par=${FileNames.encodeQueryValue(it, keep = "\\:")}" } ?: "") +
+            (str?.let { "&str=${FileNames.encodeQueryValue(it, keep = "\\:")}" } ?: "")
 
     /** 送出指令、回傳原始回應。[quiet] = 不記進「裝置」頁的紀錄（每 5 秒一次的保持連線、很長的列表）。 */
     suspend fun raw(cmd: Int, par: String? = null, str: String? = null, quiet: Boolean = false, readTimeoutMs: Long? = null): String =

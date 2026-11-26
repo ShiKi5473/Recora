@@ -69,6 +69,24 @@ class MediaStoreSink(
             .firstOrNull { it.name.equals(name, ignoreCase = true) }
             ?.uri
 
+    /** 提供給 [DownloadRepository] 使用的字串 URI 儲存介面。 */
+    fun asDownloadSink(): DownloadSink = object : DownloadSink {
+        override fun find(name: String, isImage: Boolean): DownloadSink.Entry? =
+            this@MediaStoreSink.find(name, isImage)?.let {
+                DownloadSink.Entry(it.uri.toString(), it.name, it.size, it.pending)
+            }
+
+        override fun create(name: String, isImage: Boolean, subdir: String?): String =
+            this@MediaStoreSink.create(name, isImage, subdir).toString()
+
+        override fun openOutput(uri: String, offset: Long): OutputStream =
+            this@MediaStoreSink.openOutput(Uri.parse(uri), offset)
+
+        override fun finish(uri: String) = this@MediaStoreSink.finish(Uri.parse(uri))
+
+        override fun delete(uri: String) = this@MediaStoreSink.delete(Uri.parse(uri))
+    }
+
     /** 已完成下載的檔案：大寫檔名 → 檔案。包含相簿讀的所有資料夾（相容舊版與其他資料夾）。 */
     fun downloadedEntries(): Map<String, Entry> =
         (query(false, null, null, MediaStore.MATCH_EXCLUDE, libraryDirs(false)) +

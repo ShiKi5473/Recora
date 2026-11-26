@@ -117,6 +117,14 @@ class AstroApiTest {
     }
 
     @Test
+    fun deleteEncodesSpecialCharsWhileKeepingBackslashesAndColon() = runBlocking {
+        val result = api().delete("/DCIM/VIDEO_F/clip #1&2.MP4")
+        assertTrue(result.ok)
+        val line = requestLines.first { "cmd=4003" in it }
+        assertTrue(line, line.contains("""str=A:\DCIM\VIDEO_F\clip%20%231%262.MP4"""))
+    }
+
+    @Test
     fun syncTimeSendsUtcUnencoded() = runBlocking {
         val now = java.time.ZonedDateTime.of(2026, 10, 13, 20, 38, 59, 0, java.time.ZoneId.of("Asia/Taipei"))
         val result = api().syncTime(now)
